@@ -33,6 +33,7 @@ import com.firesms.app.ui.components.FireSmsListCard
 import com.firesms.app.ui.components.FireSmsScaffold
 import com.firesms.app.ui.components.FireSmsTopLevelDestination
 import com.firesms.app.ui.components.FireSmsStatusPill
+import com.firesms.app.ui.components.formatDisplayAmount
 import com.firesms.app.ui.components.statusColor
 import com.firesms.app.ui.components.statusLabel
 import com.firesms.app.data.local.StoredTransactionSnapshot
@@ -623,14 +624,17 @@ private fun StoredTransactionSnapshot.formattedTotal(): String {
     }
     val total = transactions.fold(BigDecimal.ZERO) { sum, split ->
         sum + (split.amount.toBigDecimalOrNull() ?: BigDecimal.ZERO)
-    }.stripTrailingZeros().toPlainString()
+    }.toPlainString()
     return transactions.firstOrNull()?.formattedAmount(total) ?: total
 }
 
-private fun StoredTransactionSplit.formattedAmount(value: String): String = when {
-    !currencySymbol.isNullOrBlank() -> "$currencySymbol$value"
-    !currencyCode.isNullOrBlank() -> "$currencyCode $value"
-    else -> value
+private fun StoredTransactionSplit.formattedAmount(value: String): String {
+    val amount = formatDisplayAmount(value)
+    return when {
+        !currencySymbol.isNullOrBlank() -> "$currencySymbol$amount"
+        !currencyCode.isNullOrBlank() -> "$currencyCode $amount"
+        else -> amount
+    }
 }
 
 @Composable

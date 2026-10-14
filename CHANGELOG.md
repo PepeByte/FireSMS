@@ -18,4 +18,6 @@ This project currently does not have a formal release history.
 - Fixed: queued retries stop after a non-retryable error instead of retrying indefinitely, and wake up when the next retry is due.
 - Fixed: tapping a "Transaction added" notification opens the transaction instead of the home screen.
 - Fixed: the transaction date picker keeps the transaction's date and time-zone offset.
+- Rule editor accounts are labelled by transaction type (Paid from / Paid to, Received into / Received from, Moved from / Moved to), show a "source → destination" preview, and both fields search Firefly III accounts with a found/not-found check. The other account's Firefly ID is now stored (database version 7).
+- Firefly account lists are fetched across all pages.
 - The rule editor now validates templates, groups, and date formats with the same checks as the JSON importer, and refuses to overwrite an existing rule ID.

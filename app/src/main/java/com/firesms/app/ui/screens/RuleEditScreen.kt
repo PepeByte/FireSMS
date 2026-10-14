@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ClipEntry
@@ -15,12 +16,16 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.firesms.app.ui.components.FireSmsResultBanner
+import com.firesms.app.ui.components.FireflyAccountField
 import com.firesms.app.ui.components.FireSmsScaffold
 import com.firesms.app.ui.components.FireSmsScreen
 import com.firesms.app.domain.rules.ImportedRuleFields
 import com.firesms.app.domain.rules.RuleJsonImportResult
 import com.firesms.app.ui.components.FireSmsSection
 import com.firesms.app.ui.viewmodels.RuleEditViewModel
+import com.firesms.app.ui.viewmodels.accountRoleText
+import com.firesms.app.ui.viewmodels.checkOtherAccount
+import com.firesms.app.ui.viewmodels.checkOwnAccount
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -40,6 +45,9 @@ fun RuleEditScreen(
             viewModel.loadSourceSms(sourceSmsLogId)
         }
     }
+
+    // Load Firefly accounts up front so both account fields can be checked as the user types.
+    LaunchedEffect(Unit) { viewModel.fetchAccounts() }
 
     LaunchedEffect(state.saveSuccess) {
         if (state.saveSuccess) {
@@ -301,7 +309,7 @@ fun RuleEditScreen(
                     label = { Text("Priority (lower = checked first)") },
                     isError = priorityText.toIntOrNull() == null,
                     supportingText = if (priorityText.toIntOrNull() == null) {
-                        { Text("Enter a number; ${state.priority} is kept until you do") }
+                        @Composable { Text("Enter a number; ${state.priority} is kept until you do") }
                     } else null,
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -309,64 +317,82 @@ fun RuleEditScreen(
                 )
             }
 
-            FireSmsSection(
-                title = "Accounts",
-                subtitle = "Your account is the source of withdrawals and transfers, and the destination of deposits."
-            ) {
-                OutlinedTextField(
-                    value = state.sourceAccountKeyword ?: "",
-                    onValueChange = { viewModel.updateSourceAccountKeyword(it.ifBlank { null }) },
-                    label = { Text("Account keyword in SMS (optional)") },
-                    placeholder = { Text("Used only when no Firefly account is picked") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+            val accountText = accountRoleText(state.type)
+            FireSmsSection(title = "Accounts", subtitle = accountText.summary) {
+                FireflyAccountField(
+                    value = state.ownAccountName,
+                    onValueChange = { viewModel.updateOwnAccountName(it) },
+                    onAccountSelected = { viewModel.selectOwnAccount(it) },
+                    label = accountText.ownLabel,
+                    placeholder = accountText.ownPlaceholder,
+                    candidates = state.ownAccountCandidates,
+                    check = checkOwnAccount(state.ownAccountName, state.ownAccountId, state.accountsLoaded),
+                    loading = state.accountsLoading
                 )
-                var sourceAcctExpanded by remember { mutableStateOf(false) }
-                val filteredAccounts = remember(state.accounts, state.sourceAccountName) {
-                    val query = state.sourceAccountName ?: ""
-                    if (query.isBlank()) state.accounts
-                    else state.accounts.filter { it.attributes.name.contains(query, ignoreCase = true) }
+                FireflyAccountField(
+                    value = state.otherAccountName,
+                    onValueChange = { viewModel.updateOtherAccountName(it) },
+                    onAccountSelected = { viewModel.selectOtherAccount(it) },
+                    label = accountText.otherLabel,
+                    placeholder = accountText.otherPlaceholder,
+                    candidates = state.otherAccountCandidates,
+                    check = checkOtherAccount(
+                        state.otherAccountName,
+                        state.otherAccountId,
+                        state.type,
+                        state.accountsLoaded
+                    ),
+                    loading = state.accountsLoading
+                )
+
+                state.accountsError?.let { error ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            error,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = { viewModel.fetchAccounts(force = true) }) { Text("Retry") }
+                    }
                 }
-                Box {
+
+                // Show exactly what Firefly will record, so the direction is never a guess.
+                val ownDisplay = state.ownAccountName.trim().ifBlank {
+                    if (state.accountKeyword.isNotBlank()) "account matching \"${state.accountKeyword.trim()}\"" else "?"
+                }
+                val otherDisplay = state.otherAccountName.trim().ifBlank {
+                    if (state.type == "transfer") "?" else "(no name)"
+                }
+                val (fromAccount, toAccount) = if (state.type == "deposit") {
+                    otherDisplay to ownDisplay
+                } else {
+                    ownDisplay to otherDisplay
+                }
+                Text(
+                    "In Firefly: $fromAccount → $toAccount",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                var showKeyword by rememberSaveable { mutableStateOf(false) }
+                if (showKeyword || state.accountKeyword.isNotBlank()) {
                     OutlinedTextField(
-                        value = state.sourceAccountName ?: "",
-                        onValueChange = {
-                            viewModel.selectSourceAccount(it, "")
-                            sourceAcctExpanded = it.isNotEmpty()
-                            if (state.accounts.isEmpty()) viewModel.fetchAccounts()
+                        value = state.accountKeyword,
+                        onValueChange = { viewModel.updateAccountKeyword(it) },
+                        label = { Text("Account word in the SMS (optional)") },
+                        placeholder = { Text("e.g. XX1234") },
+                        supportingText = {
+                            Text("Used only when no account is chosen above. The matching SMS word must be your exact Firefly account name.")
                         },
-                        label = { Text("Your Firefly account") },
-                        placeholder = { Text("Type to search Firefly accounts") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
-                    DropdownMenu(
-                        expanded = sourceAcctExpanded && filteredAccounts.isNotEmpty(),
-                        onDismissRequest = { sourceAcctExpanded = false },
-                        modifier = Modifier.fillMaxWidth(0.9f)
-                    ) {
-                        filteredAccounts.take(15).forEach { account ->
-                            DropdownMenuItem(
-                                text = { Text(account.attributes.name) },
-                                onClick = {
-                                    viewModel.selectSourceAccount(account.attributes.name, account.id)
-                                    sourceAcctExpanded = false
-                                }
-                            )
-                        }
-                    }
-                    if (state.accountsLoading) {
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter))
+                } else {
+                    TextButton(onClick = { showKeyword = true }) {
+                        Text("Take my account name from the SMS instead")
                     }
                 }
-                OutlinedTextField(
-                    value = state.destinationAccountName ?: "",
-                    onValueChange = { viewModel.updateDestinationAccountName(it.ifBlank { null }) },
-                    label = { Text("Other account (optional)") },
-                    placeholder = { Text("Merchant, payer, or transfer target") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
             }
 
             FireSmsSection(

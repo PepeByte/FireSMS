@@ -106,8 +106,19 @@ class SmsParserApplyRuleTest {
         val legacy = rule.copy(type = "deposit", destinationAccountName = "Checking")
         assertEquals("Checking", apply(legacy, "debited by USD 10 at SHOP.")?.destinationAccountName)
 
-        val withdrawal = rule.copy(sourceAccountName = "Checking", sourceAccountId = "42")
-        assertEquals("42", apply(withdrawal, "debited by USD 10 at SHOP.")?.sourceAccountId)
+        val withdrawal = rule.copy(
+            sourceAccountName = "Checking",
+            sourceAccountId = "42",
+            destinationAccountName = "Example Store",
+            destinationAccountId = "7"
+        )
+        val paid = assertNotNull(apply(withdrawal, "debited by USD 10 at SHOP."))
+        assertEquals("42", paid.sourceAccountId)
+        assertEquals("Example Store", paid.destinationAccountName)
+        assertEquals("7", paid.destinationAccountId)
+
+        val pickedPayer = deposit.copy(destinationAccountId = "9")
+        assertEquals("9", apply(pickedPayer, "debited by USD 10 at SHOP.")?.sourceAccountId)
     }
 
     @Test

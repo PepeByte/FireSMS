@@ -27,10 +27,11 @@ Multi-part (long) SMS messages are joined into one body before matching.
 | `amountTemplate` | Template used to produce the amount. Usually `{{amount}}`. |
 | `descriptionSource` | Either `template` or `regex_group`. |
 | `descriptionValue` | Static text, template, or group name depending on source. |
-| `sourceAccountKeyword` | Optional. When no account is picked, the first SMS word containing this keyword (punctuation stripped) is used as your account name. |
-| `sourceAccountName` | Optional. Your Firefly account (picked in the editor). |
-| `sourceAccountId` | Optional. Firefly ID of your account (set by the picker). |
-| `destinationAccountName` | Optional. The other side of the transaction: merchant, payer, or transfer target. |
+| `sourceAccountName` | Your own Firefly account (see [Accounts](#accounts)). |
+| `sourceAccountId` | Firefly ID of your own account, set when it is picked from the list. |
+| `sourceAccountKeyword` | Optional. When no own account is set, the first SMS word containing this keyword (punctuation stripped) is used as your account name. |
+| `destinationAccountName` | The other party: merchant, payer, or the receiving account of a transfer. |
+| `destinationAccountId` | Firefly ID of the other party, set when it is picked from the list. |
 | `type` | `withdrawal`, `deposit`, or `transfer`. |
 | `priority` | Lower values are tested first. |
 | `datePattern` | Optional regex or `{{groupName}}` for transaction date. |
@@ -68,15 +69,25 @@ Amounts are cleaned by removing everything except digits and dots (so `Rs.1,234.
 
 ## Accounts
 
-The account you pick in the editor is one of your own Firefly accounts. FireSMS places it on the correct side for the transaction type:
+A rule names two accounts. The editor labels them by what happens to the money, and FireSMS puts them on the side Firefly III expects:
 
-| Type | Source | Destination |
+| Type | Editor fields | Firefly source → destination |
 |---|---|---|
-| `withdrawal` | your account | other account |
-| `deposit` | other account | your account |
-| `transfer` | your account | other account |
+| `withdrawal` | **Paid from** (your account), **Paid to** (optional) | your account → merchant |
+| `deposit` | **Received into** (your account), **Received from** (optional) | payer → your account |
+| `transfer` | **Moved from** (your account), **Moved to** (your account) | your account → your other account |
 
-If no account of yours is set, the other account is sent as the destination, as in earlier versions.
+The editor shows the result as a line such as `In Firefly: Checking → Example Store`.
+
+Both fields search the accounts in Firefly III, showing only types that fit: asset accounts and liabilities for your own account; expense accounts for a payee; revenue accounts for a payer; your own accounts for a transfer target. A check below each field shows whether the name was found:
+
+- **Found in Firefly**: the rule stores the account's ID, so it keeps working if the account is renamed.
+- **Not in Firefly yet**: allowed for payees and payers; Firefly III creates the account with the first transaction.
+- **Not one of your Firefly accounts**: your own account and a transfer target must already exist, so the rule cannot be saved.
+
+Your own account is required, either picked from the list or taken from the SMS with the account-word option. A transfer also needs its target. If Firefly III cannot be reached, names are saved as typed without checking.
+
+Rules created before these fields existed sometimes stored a deposit's own account as the destination; FireSMS reads those as your own account.
 
 ## Transaction types
 

@@ -82,6 +82,10 @@ When FireSMS creates a transaction, it can show a notification. Use the notifica
 
 The editor lets you adjust supported Firefly III transaction fields. Changes are sent back to Firefly III.
 
+## Choosing accounts in a rule
+
+The **Accounts** section of a parser rule follows the transaction type: **Paid from / Paid to** for withdrawals, **Received into / Received from** for deposits, and **Moved from / Moved to** for transfers. Pick your account from the list; the other account is optional for withdrawals and deposits. A check under each field shows whether the name exists in Firefly III, and the line **In Firefly: … → …** shows exactly which way the money will be recorded.
+
 ## Automatic categorization
 
 Under **Automation**, title-mapping rules assign Firefly III categories and budgets when a transaction description contains the rule's text (case-insensitive). They are applied when a new SMS transaction is sent to Firefly III, and again when you save an edited transaction whose category and budget are both blank.

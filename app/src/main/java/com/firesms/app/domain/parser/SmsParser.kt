@@ -3,6 +3,8 @@ package com.firesms.app.domain.parser
 import com.firesms.app.data.local.ParserRuleDao
 import com.firesms.app.data.local.entity.ParserRule
 import com.firesms.app.domain.model.ParsedTransaction
+import com.firesms.app.domain.rules.RuleAccounts
+import com.firesms.app.domain.rules.withLegacyDepositAccountResolved
 import kotlinx.coroutines.flow.first
 import java.math.BigDecimal
 import java.time.DateTimeException
@@ -40,21 +42,21 @@ class SmsParser(private val ruleDao: ParserRuleDao) {
                 ?: return null
             val amount = extractAmount(groups, rule.amountTemplate) ?: return null
 
-            // The account picked in the editor is one of the user's own (asset) accounts. Firefly
-            // requires that account on the destination side of a deposit.
-            val ownAccountName = rule.sourceAccountName
-                ?: rule.sourceAccountKeyword?.let { keywordToken(body, it) }
-            val ownAccountId = rule.sourceAccountId
-            val ownAccountIsDestination = rule.type == "deposit" &&
-                (ownAccountName != null || ownAccountId != null)
+            val accounts = rule.withLegacyDepositAccountResolved()
+            val ownName = accounts.sourceAccountName
+                ?: accounts.sourceAccountKeyword?.let { keywordToken(body, it) }
+            val ownId = accounts.sourceAccountId
+            val otherName = accounts.destinationAccountName
+            val otherId = accounts.destinationAccountId
+            val ownIsDestination = RuleAccounts.ownAccountIsDestination(rule.type)
 
             return ParsedTransaction(
                 amount = amount,
                 description = extractDescription(groups, rule),
-                sourceAccountName = if (ownAccountIsDestination) rule.destinationAccountName else ownAccountName,
-                sourceAccountId = if (ownAccountIsDestination) null else ownAccountId,
-                destinationAccountName = if (ownAccountIsDestination) ownAccountName else rule.destinationAccountName,
-                destinationAccountId = if (ownAccountIsDestination) ownAccountId else null,
+                sourceAccountName = if (ownIsDestination) otherName else ownName,
+                sourceAccountId = if (ownIsDestination) otherId else ownId,
+                destinationAccountName = if (ownIsDestination) ownName else otherName,
+                destinationAccountId = if (ownIsDestination) ownId else otherId,
                 transactionType = rule.type,
                 date = extractDate(groups, body, rule, receivedAt),
                 notes = extractRemarks(groups, rule)

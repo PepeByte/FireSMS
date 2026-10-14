@@ -52,7 +52,18 @@ data class TransactionData(
 // Firefly account list response
 @Serializable
 data class AccountListResponse(
-    val data: List<AccountResource>
+    val data: List<AccountResource>,
+    val meta: ListMeta? = null
+)
+
+@Serializable
+data class ListMeta(
+    val pagination: Pagination? = null
+)
+
+@Serializable
+data class Pagination(
+    @SerialName("total_pages") val totalPages: Int = 1
 )
 
 @Serializable
@@ -317,18 +328,32 @@ class FireflyApi(private val token: String) {
         return response.body()
     }
 
+    /** Fetches every page of accounts of [type] (e.g. `asset`, `expense`, `all`). */
     suspend fun getAccounts(baseUrl: String, type: String = "asset"): List<AccountResource> {
-        val url = "${baseUrl.trimEnd('/')}/api/v1/accounts?type=$type"
-        val response = client.get(url)
-        if (!response.status.isSuccess()) {
-            throw FireflyUnavailable(response.status.value, response.bodyAsText())
-        }
-        val result = response.body<AccountListResponse>()
-        return result.data
+        val accounts = mutableListOf<AccountResource>()
+        var page = 1
+        var totalPages: Int
+        do {
+            val url = "${baseUrl.trimEnd('/')}/api/v1/accounts?type=$type&page=$page"
+            val response = client.get(url)
+            if (!response.status.isSuccess()) {
+                throw FireflyUnavailable(response.status.value, response.bodyAsText())
+            }
+            val result = response.body<AccountListResponse>()
+            accounts += result.data
+            totalPages = result.meta?.pagination?.totalPages ?: 1
+            page++
+        } while (page <= totalPages && page <= MAX_ACCOUNT_PAGES && result.data.isNotEmpty())
+        return accounts
     }
 
     fun close() {
         client.close()
+    }
+
+    private companion object {
+        /** Safety cap on pagination: 100 pages of Firefly's default 50 accounts. */
+        const val MAX_ACCOUNT_PAGES = 100
     }
 }
 

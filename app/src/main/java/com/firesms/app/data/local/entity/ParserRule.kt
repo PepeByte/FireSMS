@@ -16,10 +16,14 @@ data class ParserRule(
     @ColumnInfo(name = "amount_template") val amountTemplate: String,
     @ColumnInfo(name = "description_source") val descriptionSource: String,
     @ColumnInfo(name = "description_value") val descriptionValue: String,
+    // Account columns keep their original names for database and backup compatibility.
+    // "source_*" is the user's own account and "destination_*" is the other party; the parser
+    // places them on the correct Firefly side for the transaction type.
     @ColumnInfo(name = "source_account_keyword") val sourceAccountKeyword: String? = null,
     @ColumnInfo(name = "source_account_name") val sourceAccountName: String? = null,
     @ColumnInfo(name = "source_account_id") val sourceAccountId: String? = null,
     @ColumnInfo(name = "destination_account_name") val destinationAccountName: String? = null,
+    @ColumnInfo(name = "destination_account_id") val destinationAccountId: String? = null,
     val type: String,
     val priority: Int = 10,
     @ColumnInfo(name = "date_pattern") val datePattern: String? = null,

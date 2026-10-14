@@ -8,10 +8,12 @@ FireSMS loads enabled parser rules ordered by priority. For each incoming SMS:
 
 1. `senderPattern` must match the SMS sender.
 2. `bodyPattern` must match the SMS body.
-3. Required templates must resolve to captured values.
+3. `amountTemplate` must resolve to a positive number.
 4. The first successful rule produces a transaction.
 
-Invalid regex patterns are skipped rather than crashing SMS processing.
+A misconfigured rule (invalid regex, unknown group, invalid date format) never stops processing: it simply does not match, and the next rule is tried. The rule editor and the JSON importer reject these mistakes before saving.
+
+Multi-part (long) SMS messages are joined into one body before matching.
 
 ## Rule fields
 
@@ -25,16 +27,16 @@ Invalid regex patterns are skipped rather than crashing SMS processing.
 | `amountTemplate` | Template used to produce the amount. Usually `{{amount}}`. |
 | `descriptionSource` | Either `template` or `regex_group`. |
 | `descriptionValue` | Static text, template, or group name depending on source. |
-| `sourceAccountKeyword` | Optional keyword used to infer source account from body text. |
-| `sourceAccountName` | Optional Firefly source account name. |
-| `sourceAccountId` | Optional Firefly source account ID. |
-| `destinationAccountName` | Optional Firefly destination account name. |
+| `sourceAccountKeyword` | Optional. When no account is picked, the first SMS word containing this keyword (punctuation stripped) is used as your account name. |
+| `sourceAccountName` | Optional. Your Firefly account (picked in the editor). |
+| `sourceAccountId` | Optional. Firefly ID of your account (set by the picker). |
+| `destinationAccountName` | Optional. The other side of the transaction: merchant, payer, or transfer target. |
 | `type` | `withdrawal`, `deposit`, or `transfer`. |
 | `priority` | Lower values are tested first. |
 | `datePattern` | Optional regex or `{{groupName}}` for transaction date. |
 | `dateFormat` | Java `DateTimeFormatter` pattern for `datePattern`. |
-| `remarksPattern` | Optional regex or `{{groupName}}` for notes. |
-| `remarksTemplate` | Optional notes template. |
+| `remarksPattern` | Optional regex (searched within the matched text) or `{{groupName}}` for notes. Used only when `remarksTemplate` is blank. |
+| `remarksTemplate` | Optional notes template. Takes precedence over `remarksPattern`. |
 
 ## Regex syntax
 
@@ -60,7 +62,21 @@ Templates reference named groups with double braces:
 Payment to {{merchant}}
 ```
 
-If a template references a group that is not present in `bodyPattern`, the rule will not parse correctly.
+Every placeholder must name a group in `bodyPattern`; the editor refuses to save a rule that does not. If an optional group does not participate in a match, its placeholder becomes empty text. A description that ends up blank falls back to the rule name.
+
+Amounts are cleaned by removing everything except digits and dots (so `Rs.1,234.50` becomes `1234.50`). If the result is not a positive number, the rule does not match.
+
+## Accounts
+
+The account you pick in the editor is one of your own Firefly accounts. FireSMS places it on the correct side for the transaction type:
+
+| Type | Source | Destination |
+|---|---|---|
+| `withdrawal` | your account | other account |
+| `deposit` | other account | your account |
+| `transfer` | your account | other account |
+
+If no account of yours is set, the other account is sent as the destination, as in earlier versions.
 
 ## Transaction types
 
@@ -89,7 +105,9 @@ datePattern = {{date}}
 dateFormat = yyyy-MM-dd HH:mm:ss
 ```
 
-The date is parsed with Java `DateTimeFormatter` and the device locale/time zone behavior used by the app.
+The date is parsed with a Java `DateTimeFormatter` pattern, in English, in the device time zone. Month and AM/PM names are matched case-insensitively, so `MMM` accepts `Mar`, `MAR`, and `mar`.
+
+Date-only formats such as `dd/MM/yy` are supported: the SMS received time of day is kept. If the date cannot be parsed, the SMS received timestamp is used.
 
 ## Importable AI JSON format
 

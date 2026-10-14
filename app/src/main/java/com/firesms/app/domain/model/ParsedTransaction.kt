@@ -6,6 +6,7 @@ data class ParsedTransaction(
     val sourceAccountName: String? = null,
     val sourceAccountId: String? = null,
     val destinationAccountName: String? = null,
+    val destinationAccountId: String? = null,
     val transactionType: String,
     val date: Long,
     val notes: String? = null,

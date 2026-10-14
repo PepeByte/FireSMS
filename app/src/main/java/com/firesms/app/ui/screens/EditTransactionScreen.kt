@@ -8,7 +8,9 @@ import androidx.compose.foundation.clickable
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.LocalTime
+import java.time.OffsetDateTime
 import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -32,7 +34,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.ui.text.style.TextOverflow
 import com.firesms.app.ui.components.FireSmsAutocompleteField
 import com.firesms.app.ui.components.FireSmsResultBanner
 import com.firesms.app.ui.components.FireSmsScaffold
@@ -200,16 +201,12 @@ fun EditTransactionScreen(
                                     var showTimePicker by remember { mutableStateOf(false) }
                                     var selectedDateMillis by remember { mutableStateOf<Long?>(null) }
 
-                                    val dateDisplayText = remember(state.transactionDate) {
-                                        if (state.transactionDate.isNotBlank()) {
-                                            try {
-                                                LocalDateTime.parse(state.transactionDate, DateTimeFormatter.ISO_LOCAL_DATE_TIME)
-                                                    .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
-                                            } catch (_: Exception) {
-                                                state.transactionDate
-                                            }
-                                        } else ""
+                                    val parsedDate = remember(state.transactionDate) {
+                                        parseFireflyDate(state.transactionDate)
                                     }
+                                    val dateDisplayText = parsedDate
+                                        ?.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+                                        ?: state.transactionDate
 
                                     Box(modifier = Modifier.weight(1f)) {
                                         OutlinedTextField(
@@ -230,10 +227,9 @@ fun EditTransactionScreen(
 
                                     if (showDatePicker) {
                                         val datePickerState = rememberDatePickerState(
-                                            initialSelectedDateMillis = try {
-                                                LocalDateTime.parse(state.transactionDate, DateTimeFormatter.ISO_LOCAL_DATE_TIME)
-                                                    .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-                                            } catch (_: Exception) { System.currentTimeMillis() }
+                                            // DatePicker works in UTC midnights.
+                                            initialSelectedDateMillis = (parsedDate?.toLocalDate() ?: java.time.LocalDate.now())
+                                                .atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
                                         )
                                         DatePickerDialog(
                                             onDismissRequest = { showDatePicker = false },
@@ -254,12 +250,8 @@ fun EditTransactionScreen(
 
                                     if (showTimePicker && selectedDateMillis != null) {
                                         val timePickerState = rememberTimePickerState(
-                                            initialHour = try {
-                                                LocalDateTime.parse(state.transactionDate, DateTimeFormatter.ISO_LOCAL_DATE_TIME).hour
-                                            } catch (_: Exception) { 12 },
-                                            initialMinute = try {
-                                                LocalDateTime.parse(state.transactionDate, DateTimeFormatter.ISO_LOCAL_DATE_TIME).minute
-                                            } catch (_: Exception) { 0 }
+                                            initialHour = parsedDate?.hour ?: 12,
+                                            initialMinute = parsedDate?.minute ?: 0
                                         )
                                         AlertDialog(
                                             onDismissRequest = { showTimePicker = false },
@@ -268,11 +260,14 @@ fun EditTransactionScreen(
                                             confirmButton = {
                                                 TextButton(onClick = {
                                                     val date = Instant.ofEpochMilli(selectedDateMillis!!)
-                                                        .atZone(ZoneId.systemDefault())
+                                                        .atZone(ZoneOffset.UTC)
                                                         .toLocalDate()
                                                     val time = LocalTime.of(timePickerState.hour, timePickerState.minute)
-                                                    val dateTime = LocalDateTime.of(date, time)
-                                                    val formatted = dateTime.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)
+                                                    // Keep the transaction's original offset so the day does not shift.
+                                                    val offset = parsedDate?.offset
+                                                        ?: ZoneId.systemDefault().rules.getOffset(Instant.now())
+                                                    val formatted = OffsetDateTime.of(date, time, offset)
+                                                        .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
                                                     viewModel.updateTransactionField { it.copy(transactionDate = formatted) }
                                                     showTimePicker = false
                                                 }) { Text("OK") }
@@ -317,7 +312,7 @@ fun EditTransactionScreen(
                                         leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
                                         singleLine = true,
                                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = typeExpanded) },
-                                        modifier = Modifier.fillMaxWidth().menuAnchor()
+                                        modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled = true)
                                     )
                                     ExposedDropdownMenu(
                                         expanded = typeExpanded,
@@ -488,4 +483,13 @@ private fun SplitCard(
             )
         }
     }
+}
+
+/** Firefly returns RFC 3339 dates with an offset; values without one are treated as device-local. */
+private fun parseFireflyDate(value: String): OffsetDateTime? {
+    if (value.isBlank()) return null
+    return runCatching { OffsetDateTime.parse(value) }.getOrNull()
+        ?: runCatching {
+            LocalDateTime.parse(value).atZone(ZoneId.systemDefault()).toOffsetDateTime()
+        }.getOrNull()
 }

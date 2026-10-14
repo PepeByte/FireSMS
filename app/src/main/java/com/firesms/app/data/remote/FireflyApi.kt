@@ -9,6 +9,9 @@ import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
+import kotlinx.coroutines.CancellationException
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -18,6 +21,7 @@ data class TransactionRequest(
     @SerialName("transactions") val transactions: List<TransactionBody>
 )
 
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 data class TransactionBody(
     val type: String,
@@ -26,11 +30,13 @@ data class TransactionBody(
     val description: String,
     @SerialName("source_id") val sourceId: String? = null,
     @SerialName("source_name") val sourceName: String? = null,
+    @SerialName("destination_id") val destinationId: String? = null,
     @SerialName("destination_name") val destinationName: String? = null,
     @SerialName("external_id") val externalId: String,
     @SerialName("category_name") val categoryName: String? = null,
     @SerialName("budget_name") val budgetName: String? = null,
-    val notes: String = "Imported from FireSMS"
+    // Always sent: with encodeDefaults = false a note equal to the default would be dropped.
+    @EncodeDefault val notes: String = "Imported from FireSMS"
 )
 
 @Serializable
@@ -187,6 +193,7 @@ fun buildCreateRequest(
         description = transaction.description,
         sourceId = transaction.sourceAccountId,
         sourceName = transaction.sourceAccountName,
+        destinationId = transaction.destinationAccountId,
         destinationName = transaction.destinationAccountName,
         externalId = externalId,
         categoryName = transaction.categoryName,
@@ -220,19 +227,13 @@ class FireflyApi(private val token: String) {
         transaction: ParsedTransaction,
         externalId: String
     ): String {
-        val url = "${baseUrl.trimEnd('/')}/api/v1/transactions"
-        val body = buildCreateRequest(transaction, externalId)
-        return createTransactionRaw(baseUrl, body)
+        return createTransactionRaw(baseUrl, buildCreateRequest(transaction, externalId))
     }
 
+    /** Returns whether the server accepted the token; network errors propagate to the caller. */
     suspend fun testConnection(baseUrl: String): Boolean {
-        return try {
-            val url = "${baseUrl.trimEnd('/')}/api/v1/about"
-            val response = client.get(url)
-            response.status.isSuccess()
-        } catch (_: Exception) {
-            false
-        }
+        val url = "${baseUrl.trimEnd('/')}/api/v1/about"
+        return client.get(url).status.isSuccess()
     }
 
     suspend fun createTransactionRaw(
@@ -251,6 +252,8 @@ class FireflyApi(private val token: String) {
             val txResponse = response.body<TransactionResponse>()
             return txResponse.data.id
         } catch (e: FireflyError) {
+            throw e
+        } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             // Network/timeout/etc — treat as unavailable for retry

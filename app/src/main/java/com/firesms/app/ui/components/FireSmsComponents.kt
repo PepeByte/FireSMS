@@ -3,11 +3,9 @@ package com.firesms.app.ui.components
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Build
@@ -218,48 +216,6 @@ fun FireSmsStatusPill(
     }
 }
 
-// ─── Metric card ───────────────────────────────────────────────
-
-@Composable
-fun FireSmsMetricCard(
-    label: String,
-    value: String,
-    color: Color,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        modifier = modifier,
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant
-        ),
-        shape = MaterialTheme.shapes.medium,
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-    ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            // Accent strip at top
-            Surface(
-                modifier = Modifier.fillMaxWidth().height(4.dp),
-                color = color
-            ) {}
-            Column(
-                modifier = Modifier.padding(16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    text = value,
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = color
-                )
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-    }
-}
-
 // ─── Result banner ─────────────────────────────────────────────
 
 @Composable
@@ -334,26 +290,6 @@ fun FireSmsPreferenceOption(
             Spacer(Modifier.width(12.dp))
             RadioButton(selected = selected, onClick = onClick)
         }
-    }
-}
-
-// ─── Destructive icon button ───────────────────────────────────
-
-@Composable
-fun FireSmsDestructiveIconButton(
-    contentDescription: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    IconButton(
-        onClick = onClick,
-        modifier = modifier.size(48.dp)
-    ) {
-        Icon(
-            Icons.Default.Delete,
-            contentDescription = contentDescription,
-            tint = MaterialTheme.colorScheme.error
-        )
     }
 }
 

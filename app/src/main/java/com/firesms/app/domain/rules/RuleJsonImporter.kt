@@ -59,68 +59,21 @@ object RuleJsonImporter {
             return RuleJsonImportResult.Error("Invalid rule JSON: ${e.message ?: "unable to read input"}")
         }
 
-        if (payload.bodyPattern.isBlank()) {
-            return RuleJsonImportResult.Error("bodyPattern cannot be blank.")
-        }
-        try {
-            Regex(payload.bodyPattern, RegexOption.DOT_MATCHES_ALL)
-        } catch (_: IllegalArgumentException) {
-            return RuleJsonImportResult.Error("bodyPattern is not a valid Kotlin/Java regular expression.")
-        }
-
-        if (payload.amountTemplate.isBlank()) {
-            return RuleJsonImportResult.Error("amountTemplate cannot be blank.")
-        }
-        if (payload.descriptionSource !in setOf("template", "regex_group")) {
-            return RuleJsonImportResult.Error(
-                "descriptionSource must be either \"template\" or \"regex_group\"."
-            )
-        }
-        if (payload.descriptionValue.isBlank()) {
-            return RuleJsonImportResult.Error("descriptionValue cannot be blank.")
-        }
-        if (payload.type !in setOf("withdrawal", "deposit", "transfer")) {
-            return RuleJsonImportResult.Error(
-                "type must be \"withdrawal\", \"deposit\", or \"transfer\"."
-            )
-        }
-
-        val namedGroups = extractNamedGroups(payload.bodyPattern)
-
-        validateTemplate("amountTemplate", payload.amountTemplate, namedGroups)?.let {
-            return RuleJsonImportResult.Error(it)
-        }
-        if (payload.descriptionSource == "regex_group") {
-            if (payload.descriptionValue !in namedGroups) {
-                return RuleJsonImportResult.Error(
-                    "descriptionValue references a group that is missing from bodyPattern."
-                )
-            }
-        } else {
-            validateTemplate("descriptionValue", payload.descriptionValue, namedGroups)?.let {
-                return RuleJsonImportResult.Error(it)
-            }
-        }
-
         val datePattern = payload.datePattern.orEmpty()
         val dateFormat = payload.dateFormat.orEmpty()
-        if (datePattern.isBlank() != dateFormat.isBlank()) {
-            return RuleJsonImportResult.Error(
-                "datePattern and dateFormat must either both be set or both be blank."
-            )
-        }
-        validateOptionalPattern("datePattern", datePattern, namedGroups)?.let {
-            return RuleJsonImportResult.Error(it)
-        }
-
         val remarksPattern = payload.remarksPattern.orEmpty()
         val remarksTemplate = payload.remarksTemplate.orEmpty()
-        validateOptionalPattern("remarksPattern", remarksPattern, namedGroups)?.let {
-            return RuleJsonImportResult.Error(it)
-        }
-        validateTemplate("remarksTemplate", remarksTemplate, namedGroups)?.let {
-            return RuleJsonImportResult.Error(it)
-        }
+        RuleValidator.validate(
+            bodyPattern = payload.bodyPattern,
+            amountTemplate = payload.amountTemplate,
+            descriptionSource = payload.descriptionSource,
+            descriptionValue = payload.descriptionValue,
+            type = payload.type,
+            datePattern = datePattern,
+            dateFormat = dateFormat,
+            remarksPattern = remarksPattern,
+            remarksTemplate = remarksTemplate
+        )?.let { return RuleJsonImportResult.Error(it) }
 
         return RuleJsonImportResult.Success(
             fields = ImportedRuleFields(
@@ -171,81 +124,6 @@ object RuleJsonImporter {
             remarksPattern = optionalString("remarksPattern"),
             remarksTemplate = optionalString("remarksTemplate")
         )
-    }
-
-    private fun extractNamedGroups(pattern: String): Set<String> {
-        val groups = mutableSetOf<String>()
-        var cursor = 0
-        while (cursor < pattern.length) {
-            val start = pattern.indexOf("(?<", cursor)
-            if (start == -1) break
-            val nameStart = start + 3
-            val nameEnd = pattern.indexOf('>', nameStart)
-            if (nameEnd == -1) break
-            val name = pattern.substring(nameStart, nameEnd)
-            if (name.isNotEmpty() && name.first().isLetter() && name.all { it.isLetterOrDigit() }) {
-                groups += name
-            }
-            cursor = nameEnd + 1
-        }
-        return groups
-    }
-
-    private fun extractPlaceholderNames(template: String): List<String> {
-        val groups = mutableListOf<String>()
-        var cursor = 0
-        while (cursor < template.length) {
-            val start = template.indexOf("{{", cursor)
-            if (start == -1) break
-            val end = template.indexOf("}}", start + 2)
-            if (end == -1) break
-            val content = template.substring(start + 2, end)
-            val name = content.takeWhile { it.isLetterOrDigit() || it == '_' }
-            if (name.isNotEmpty()) groups += name
-            cursor = end + 2
-        }
-        return groups
-    }
-
-    private fun exactPlaceholderName(pattern: String): String? {
-        if (!pattern.startsWith("{{") || !pattern.endsWith("}}")) return null
-        val name = pattern.substring(2, pattern.length - 2)
-        return name.takeIf {
-            it.isNotEmpty() && it.all { char -> char.isLetterOrDigit() || char == '_' }
-        }
-    }
-
-    private fun validateTemplate(
-        fieldName: String,
-        template: String,
-        namedGroups: Set<String>
-    ): String? {
-        val missingGroup = extractPlaceholderNames(template)
-            .firstOrNull { it !in namedGroups }
-        return missingGroup?.let {
-            "$fieldName references {{$it}}, which is missing from bodyPattern."
-        }
-    }
-
-    private fun validateOptionalPattern(
-        fieldName: String,
-        pattern: String,
-        namedGroups: Set<String>
-    ): String? {
-        if (pattern.isBlank()) return null
-
-        val placeholderName = exactPlaceholderName(pattern)
-        if (placeholderName != null) {
-            return if (placeholderName in namedGroups) null
-            else "$fieldName references {{$placeholderName}}, which is missing from bodyPattern."
-        }
-
-        return try {
-            Regex(pattern)
-            null
-        } catch (_: IllegalArgumentException) {
-            "$fieldName is not a valid Kotlin/Java regular expression."
-        }
     }
 
     private data class RepairedJsonInput(

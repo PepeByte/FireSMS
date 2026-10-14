@@ -137,18 +137,20 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             _isTesting.value = true
             _testResult.value = null
+            val api = FireflyApi(token)
             try {
-                val api = FireflyApi(token)
                 val success = api.testConnection(url.trimEnd('/'))
-                api.close()
                 _testResult.value = if (success) {
                     TestResult.Success
                 } else {
-                    TestResult.Failure("Invalid response from server")
+                    TestResult.Failure("Server rejected the request. Check the URL and access token.")
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _testResult.value = TestResult.Failure(e.message ?: "Unknown error")
             } finally {
+                api.close()
                 _isTesting.value = false
             }
         }

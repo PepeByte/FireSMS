@@ -12,12 +12,14 @@ import com.firesms.app.domain.parser.SmsParser
 import com.firesms.app.domain.rules.ImportedRuleFields
 import com.firesms.app.domain.rules.RuleJsonImportResult
 import com.firesms.app.domain.rules.RuleJsonImporter
+import com.firesms.app.domain.rules.RuleValidator
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withContext
 import java.util.UUID
 
 data class RuleEditState(
@@ -70,9 +72,14 @@ class RuleEditViewModel(application: Application) : AndroidViewModel(application
     private val _state = MutableStateFlow(RuleEditState())
     val state: StateFlow<RuleEditState> = _state.asStateFlow()
 
+    /** ID of the stored rule being edited; null while creating a new rule. */
+    private var loadedRuleId: String? = null
+
     fun loadRule(ruleId: String) {
+        if (loadedRuleId == ruleId) return
         viewModelScope.launch {
             val rule = dao.getById(ruleId) ?: return@launch
+            loadedRuleId = rule.id
             _state.value = RuleEditState(
                 id = rule.id,
                 name = rule.name,
@@ -199,8 +206,16 @@ class RuleEditViewModel(application: Application) : AndroidViewModel(application
             _state.value = _state.value.copy(saving = true, saveError = null)
             try {
                 val state = _state.value
-                val id = state.id.ifBlank { "rule-${UUID.randomUUID()}" }
+                val id = state.id.trim().ifBlank { "rule-${UUID.randomUUID()}" }
+                if (loadedRuleId == null && dao.getById(id) != null) {
+                    _state.value = _state.value.copy(
+                        saveError = "A rule with ID \"$id\" already exists. Choose another ID or leave it blank.",
+                        saving = false
+                    )
+                    return@launch
+                }
                 dao.upsert(state.toParserRule(id))
+                loadedRuleId = id
                 _state.value = _state.value.copy(id = id, saveSuccess = true, saving = false)
             } catch (error: Exception) {
                 _state.value = _state.value.copy(
@@ -227,7 +242,8 @@ class RuleEditViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             val resultText = try {
                 val rule = _state.value.toParserRule(_state.value.id.ifBlank { "test-rule" })
-                val result = withTimeout(5000) { parser.testRule(rule, sender, body) }
+                // Regex matching can be slow; keep it off the main thread but update state on it.
+                val result = withContext(Dispatchers.Default) { parser.testRule(rule, sender, body) }
                 result?.let {
                     buildString {
                         append("Parsed: ${it.transactionType} ${it.amount}")
@@ -248,9 +264,32 @@ class RuleEditViewModel(application: Application) : AndroidViewModel(application
         if (state.bodyPattern.isBlank()) return "Add a message body pattern"
         runCatching { Regex(state.senderPattern) }
             .onFailure { return "Sender pattern is not valid regex: ${it.message}" }
-        runCatching { Regex(state.bodyPattern) }
-            .onFailure { return "Body pattern is not valid regex: ${it.message}" }
-        return null
+        return RuleValidator.validate(
+            bodyPattern = state.bodyPattern,
+            amountTemplate = state.amountTemplate,
+            descriptionSource = state.descriptionSource,
+            descriptionValue = state.descriptionValue,
+            type = state.type,
+            datePattern = state.datePattern,
+            dateFormat = state.dateFormat,
+            remarksPattern = state.remarksPattern,
+            remarksTemplate = state.remarksTemplate,
+            label = { FIELD_LABELS[it] ?: it }
+        )
+    }
+
+    private companion object {
+        val FIELD_LABELS = mapOf(
+            "bodyPattern" to "Body pattern",
+            "amountTemplate" to "Amount template",
+            "descriptionSource" to "Description source",
+            "descriptionValue" to "Description value",
+            "type" to "Transaction type",
+            "datePattern" to "Date pattern",
+            "dateFormat" to "Date format",
+            "remarksPattern" to "Remarks pattern",
+            "remarksTemplate" to "Remarks template"
+        )
     }
 
     private fun RuleEditState.toParserRule(ruleId: String) = ParserRule(
@@ -261,10 +300,10 @@ class RuleEditViewModel(application: Application) : AndroidViewModel(application
         amountTemplate = amountTemplate,
         descriptionSource = descriptionSource,
         descriptionValue = descriptionValue,
-        sourceAccountKeyword = sourceAccountKeyword,
+        sourceAccountKeyword = sourceAccountKeyword?.trim()?.ifBlank { null },
         sourceAccountName = sourceAccountName?.ifBlank { null },
         sourceAccountId = sourceAccountId?.ifBlank { null },
-        destinationAccountName = destinationAccountName,
+        destinationAccountName = destinationAccountName?.trim()?.ifBlank { null },
         type = type,
         priority = priority,
         datePattern = datePattern.ifBlank { null },

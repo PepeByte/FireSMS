@@ -2,6 +2,7 @@ package com.firesms.app.ui.screens
 
 import android.content.ClipData
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -10,6 +11,7 @@ import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.firesms.app.ui.components.FireSmsResultBanner
@@ -285,20 +287,37 @@ fun RuleEditScreen(
                     }
                 }
 
+                // Keep the text separately so the field can be cleared while typing a new number.
+                var priorityText by remember { mutableStateOf(state.priority.toString()) }
+                LaunchedEffect(state.priority) {
+                    if (priorityText.toIntOrNull() != state.priority) priorityText = state.priority.toString()
+                }
                 OutlinedTextField(
-                    value = state.priority.toString(),
-                    onValueChange = { it.toIntOrNull()?.let { n -> viewModel.updatePriority(n) } },
-                    label = { Text("Priority") },
+                    value = priorityText,
+                    onValueChange = { text ->
+                        priorityText = text.trim().takeIf { it.matches(Regex("-?[0-9]{0,6}")) } ?: priorityText
+                        priorityText.toIntOrNull()?.let { viewModel.updatePriority(it) }
+                    },
+                    label = { Text("Priority (lower = checked first)") },
+                    isError = priorityText.toIntOrNull() == null,
+                    supportingText = if (priorityText.toIntOrNull() == null) {
+                        { Text("Enter a number; ${state.priority} is kept until you do") }
+                    } else null,
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth()
                 )
             }
 
-            FireSmsSection(title = "Accounts") {
+            FireSmsSection(
+                title = "Accounts",
+                subtitle = "Your account is the source of withdrawals and transfers, and the destination of deposits."
+            ) {
                 OutlinedTextField(
                     value = state.sourceAccountKeyword ?: "",
                     onValueChange = { viewModel.updateSourceAccountKeyword(it.ifBlank { null }) },
-                    label = { Text("Source account keyword") },
+                    label = { Text("Account keyword in SMS (optional)") },
+                    placeholder = { Text("Used only when no Firefly account is picked") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -316,7 +335,7 @@ fun RuleEditScreen(
                             sourceAcctExpanded = it.isNotEmpty()
                             if (state.accounts.isEmpty()) viewModel.fetchAccounts()
                         },
-                        label = { Text("Source account name") },
+                        label = { Text("Your Firefly account") },
                         placeholder = { Text("Type to search Firefly accounts") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
@@ -343,7 +362,8 @@ fun RuleEditScreen(
                 OutlinedTextField(
                     value = state.destinationAccountName ?: "",
                     onValueChange = { viewModel.updateDestinationAccountName(it.ifBlank { null }) },
-                    label = { Text("Destination account name") },
+                    label = { Text("Other account (optional)") },
+                    placeholder = { Text("Merchant, payer, or transfer target") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -357,7 +377,7 @@ fun RuleEditScreen(
                     value = state.datePattern,
                     onValueChange = { viewModel.updateDatePattern(it) },
                     label = { Text("Date pattern") },
-                    placeholder = { Text("{{date_group}} or regex") },
+                    placeholder = { Text("{{date}} or regex") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -365,7 +385,7 @@ fun RuleEditScreen(
                     value = state.dateFormat,
                     onValueChange = { viewModel.updateDateFormat(it) },
                     label = { Text("Date format") },
-                    placeholder = { Text("dd/MM/yy, yyyy-MM-dd'T'HH:mm:ss") },
+                    placeholder = { Text("dd-MMM-yyyy HH:mm, dd/MM/yy") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -379,7 +399,7 @@ fun RuleEditScreen(
                     value = state.remarksPattern,
                     onValueChange = { viewModel.updateRemarksPattern(it) },
                     label = { Text("Remarks pattern") },
-                    placeholder = { Text("Regex to extract remarks") },
+                    placeholder = { Text("Used only when the template is blank") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -387,7 +407,7 @@ fun RuleEditScreen(
                     value = state.remarksTemplate,
                     onValueChange = { viewModel.updateRemarksTemplate(it) },
                     label = { Text("Remarks template") },
-                    placeholder = { Text("{{remark_group}} or custom text") },
+                    placeholder = { Text("Ref {{ref}}") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )

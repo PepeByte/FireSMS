@@ -36,7 +36,7 @@ fun FireSmsAutocompleteField(
             singleLine = true,
             leadingIcon = leadingIcon,
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier.fillMaxWidth().menuAnchor()
+            modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryEditable, enabled = true)
         )
         ExposedDropdownMenu(
             expanded = expanded && filtered.isNotEmpty(),

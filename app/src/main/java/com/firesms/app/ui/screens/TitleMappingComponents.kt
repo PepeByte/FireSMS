@@ -1,119 +1,16 @@
 package com.firesms.app.ui.screens
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.firesms.app.data.local.entity.TitleMappingRule
 import com.firesms.app.ui.components.FireSmsAutocompleteField
-import com.firesms.app.ui.components.FireSmsConfirmDialog
-import com.firesms.app.ui.components.FireSmsEmptyState
 import com.firesms.app.ui.components.FireSmsListCard
-import com.firesms.app.ui.components.FireSmsScaffold
-import com.firesms.app.ui.viewmodels.TitleMappingsViewModel
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun TitleMappingsScreen(
-    onBack: () -> Unit,
-    viewModel: TitleMappingsViewModel = viewModel()
-) {
-    val mappings by viewModel.mappings.collectAsState()
-    val saveResult by viewModel.saveResult.collectAsState()
-    val categorySuggestions by viewModel.categorySuggestions.collectAsState()
-    val budgetSuggestions by viewModel.budgetSuggestions.collectAsState()
-    val loadingSuggestions by viewModel.loadingSuggestions.collectAsState()
-    val snackbarHostState = remember { SnackbarHostState() }
-
-    var showAddEditDialog by remember { mutableStateOf(false) }
-    var editingRule by remember { mutableStateOf<TitleMappingRule?>(null) }
-    var pendingDelete by remember { mutableStateOf<TitleMappingRule?>(null) }
-
-    LaunchedEffect(saveResult) {
-        if (saveResult != null) {
-            snackbarHostState.showSnackbar(saveResult!!)
-            viewModel.clearSaveResult()
-        }
-    }
-
-    FireSmsScaffold(
-        title = "Automatic categorization",
-        onBack = onBack,
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-        floatingActionButton = {
-            FloatingActionButton(onClick = {
-                editingRule = null
-                showAddEditDialog = true
-            }) {
-                Icon(Icons.Default.Add, contentDescription = "Add mapping")
-            }
-        }
-    ) { padding ->
-        if (mappings.isEmpty()) {
-            FireSmsEmptyState(
-                title = "No title mappings yet",
-                message = "Create a rule to automatically assign categories and budgets to transactions based on their title.",
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-                    .padding(32.dp)
-            )
-        } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize().padding(padding),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(mappings, key = { it.id }) { rule ->
-                    TitleMappingCard(
-                        rule = rule,
-                        onToggleEnabled = { viewModel.toggleEnabled(rule) },
-                        onClick = {
-                            editingRule = rule
-                            showAddEditDialog = true
-                        },
-                        onDelete = { pendingDelete = rule }
-                    )
-                }
-            }
-        }
-    }
-
-    pendingDelete?.let { rule ->
-        FireSmsConfirmDialog(
-            title = "Delete categorization rule?",
-            message = "Transactions containing ${rule.titlePattern} will no longer be categorized automatically.",
-            confirmText = "Delete",
-            onConfirm = {
-                viewModel.deleteMapping(rule)
-                pendingDelete = null
-            },
-            onDismiss = { pendingDelete = null }
-        )
-    }
-
-    if (showAddEditDialog) {
-        TitleMappingEditDialog(
-            existingRule = editingRule,
-            categorySuggestions = categorySuggestions,
-            budgetSuggestions = budgetSuggestions,
-            loadingSuggestions = loadingSuggestions,
-            onDismiss = { showAddEditDialog = false },
-            onSave = { rule ->
-                viewModel.upsertMapping(rule)
-                showAddEditDialog = false
-            }
-        )
-    }
-}
 
 @Composable
 internal fun TitleMappingCard(

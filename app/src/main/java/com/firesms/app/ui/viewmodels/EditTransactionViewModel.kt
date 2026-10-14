@@ -51,9 +51,7 @@ data class EditTransactionState(
     val saving: Boolean = false,
     val saveError: String? = null,
     val saveSuccess: Boolean = false
-) {
-    fun originalSplitsOrThrow(): List<FireflyTransactionSplit> = originalSplits
-}
+)
 
 class EditTransactionViewModel(application: Application) : AndroidViewModel(application) {
     private val db = (application as FireSmsApp).database
@@ -68,7 +66,12 @@ class EditTransactionViewModel(application: Application) : AndroidViewModel(appl
         _state.value = _state.value.let(update)
     }
 
+    private var loadedSmsLogId: Long? = null
+
     fun load(smsLogId: Long?) {
+        // The screen calls this again after a configuration change; keep unsaved edits.
+        if (smsLogId != null && smsLogId == loadedSmsLogId) return
+        loadedSmsLogId = smsLogId
         viewModelScope.launch {
             if (smsLogId == null) {
                 _state.value = _state.value.copy(loading = false, error = "Invalid SMS log ID")
@@ -154,6 +157,7 @@ class EditTransactionViewModel(application: Application) : AndroidViewModel(appl
                     accountSuggestions = accounts.map { it.attributes.name }
                 )
             } catch (e: Exception) {
+                loadedSmsLogId = null
                 _state.value = _state.value.copy(
                     loading = false,
                     error = "Failed to load transaction: ${e.message}"
@@ -225,13 +229,16 @@ class EditTransactionViewModel(application: Application) : AndroidViewModel(appl
                 _state.value = current.copy(saveError = "Row ${i + 1}: amount is required")
                 return
             }
+            val amount = row.amount.trim().toBigDecimalOrNull()
+            if (amount == null || amount.signum() <= 0) {
+                _state.value = current.copy(saveError = "Row ${i + 1}: amount must be a positive number")
+                return
+            }
         }
 
         // For multiple splits, validate sum
         if (current.rows.size > 1) {
-            val splitSum = current.rows.sumOf { row ->
-                try { BigDecimal(row.amount) } catch (_: Exception) { BigDecimal.ZERO }
-            }
+            val splitSum = current.rows.sumOf { row -> BigDecimal(row.amount.trim()) }
             val original = try {
                 BigDecimal(current.originalTotal)
             } catch (_: Exception) {
@@ -254,11 +261,11 @@ class EditTransactionViewModel(application: Application) : AndroidViewModel(appl
             val token = prefs.fireflyToken.first()
             val api = FireflyApi(token)
             try {
-                val originalSplits = current.originalSplitsOrThrow()
+                val originalSplits = current.originalSplits
 
                 val mergedSplits = current.rows.mapIndexed { i, row ->
                     val original = originalSplits.getOrNull(i)
-                    val roundedAmount = java.math.BigDecimal(row.amount).setScale(2, java.math.RoundingMode.HALF_UP).toPlainString()
+                    val roundedAmount = java.math.BigDecimal(row.amount.trim()).setScale(2, java.math.RoundingMode.HALF_UP).toPlainString()
 
                     // Resolve title mapping for blank category/budget on save
                     val catName = row.categoryName.ifBlank { null }

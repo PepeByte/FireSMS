@@ -3,6 +3,7 @@ package com.firesms.app
 import android.app.Application
 import com.firesms.app.data.local.AppDatabase
 import com.firesms.app.data.local.PreferencesManager
+import com.firesms.app.service.createNotificationChannels
 import com.firesms.app.worker.configureHistoryCleanup
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -22,6 +23,7 @@ class FireSmsApp : Application() {
         super.onCreate()
         database = AppDatabase.getInstance(this)
         preferencesManager = PreferencesManager(this)
+        createNotificationChannels(this)
         applicationScope.launch { configureHistoryCleanup(this@FireSmsApp) }
     }
 }

@@ -24,6 +24,13 @@ interface PendingTransactionDao {
     @Query("SELECT COUNT(*) FROM pending_transactions WHERE retries < max_retries")
     suspend fun countActive(): Int
 
+    @Query("SELECT MIN(next_retry_at) FROM pending_transactions WHERE retries < max_retries")
+    suspend fun nextActiveRetryAt(): Long?
+
+    /** Stops retrying a row; it stays in the table as a dead letter. */
+    @Query("UPDATE pending_transactions SET retries = max_retries, last_error = :lastError WHERE id = :id")
+    suspend fun markDead(id: Long, lastError: String?)
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(transaction: PendingTransaction): Long
 

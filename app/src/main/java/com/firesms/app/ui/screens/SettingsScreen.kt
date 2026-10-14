@@ -48,7 +48,7 @@ fun SettingsScreen(
     var urlInput by remember { mutableStateOf(url) }
     var tokenInput by remember { mutableStateOf(token) }
     val snackbarHostState = remember { SnackbarHostState() }
-    var didSaveSync by remember { mutableStateOf(false) }
+    var syncSaveCount by remember { mutableIntStateOf(0) }
     var connectionSaveCount by remember { mutableIntStateOf(0) }
     var retentionMenuExpanded by remember { mutableStateOf(false) }
     var pendingImportUri by remember { mutableStateOf<android.net.Uri?>(null) }
@@ -118,7 +118,10 @@ fun SettingsScreen(
                     description = "Sync whenever the device has an internet connection.",
                     selected = syncNetworkPolicy == "any_network",
                     onClick = {
-                        viewModel.saveSyncNetworkPolicy("any_network")
+                        if (syncNetworkPolicy != "any_network") {
+                            viewModel.saveSyncNetworkPolicy("any_network")
+                            syncSaveCount++
+                        }
                     }
                 )
                 FireSmsPreferenceOption(
@@ -126,7 +129,10 @@ fun SettingsScreen(
                     description = "Wait for Wi-Fi before retrying queued transactions.",
                     selected = syncNetworkPolicy == "wifi_only",
                     onClick = {
-                        viewModel.saveSyncNetworkPolicy("wifi_only")
+                        if (syncNetworkPolicy != "wifi_only") {
+                            viewModel.saveSyncNetworkPolicy("wifi_only")
+                            syncSaveCount++
+                        }
                     }
                 )
             }
@@ -364,12 +370,11 @@ fun SettingsScreen(
         )
     }
 
-    // Show snackbar when sync preference changes (skip initial emission)
-    LaunchedEffect(syncNetworkPolicy) {
-        if (didSaveSync) {
+    // Only explicit changes show a snackbar; the flow also emits when the stored value first loads.
+    LaunchedEffect(syncSaveCount) {
+        if (syncSaveCount > 0) {
             snackbarHostState.showSnackbar("Sync preference saved")
         }
-        didSaveSync = true
     }
 
     // Connection save triggers snackbar

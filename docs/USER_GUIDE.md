@@ -84,7 +84,7 @@ The editor lets you adjust supported Firefly III transaction fields. Changes are
 
 ## Automatic categorization
 
-Under **Automation**, title-mapping rules can assign Firefly III categories and budgets based on transaction titles/descriptions.
+Under **Automation**, title-mapping rules assign Firefly III categories and budgets when a transaction description contains the rule's text (case-insensitive). They are applied when a new SMS transaction is sent to Firefly III, and again when you save an edited transaction whose category and budget are both blank.
 
 Rules are evaluated by priority. Use specific patterns before broad patterns.
 

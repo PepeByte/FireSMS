@@ -72,9 +72,10 @@ FireSMS parses rules using `app/src/main/java/com/firesms/app/domain/parser/SmsP
 - Extracted amounts are cleaned by removing everything except digits and dots.
 - `descriptionSource` must be `template` or `regex_group`.
 - `type` must be `withdrawal`, `deposit`, or `transfer`.
+- Amounts that do not clean up to a positive number make the rule not match.
 - `datePattern` may be `{{dateGroup}}` or a standalone regex.
-- `dateFormat` is a Java `DateTimeFormatter` pattern used with `LocalDateTime.parse(..., Locale.ENGLISH)`.
-- `remarksPattern` may be `{{groupName}}`, a standalone regex, or blank.
+- `dateFormat` is a Java `DateTimeFormatter` pattern, parsed in English with case-insensitive month and AM/PM names. Date-only patterns are allowed; the SMS received time of day is used.
+- `remarksPattern` may be `{{groupName}}`, a standalone regex, or blank. It is ignored when `remarksTemplate` is set.
 - `remarksTemplate` may use any named groups captured by `bodyPattern`.
 
 ## Regex compatibility
@@ -164,7 +165,7 @@ Ask the user if the wording is genuinely ambiguous.
 
 ### `datePattern` and `dateFormat`
 
-Only populate both fields when the SMS contains a date and time that can be parsed as a `LocalDateTime`. Otherwise set both to an empty string.
+Populate both fields when the SMS contains a date, with or without a time. Otherwise set both to an empty string.
 
 Prefer capturing the complete value in `bodyPattern`, then referencing it:
 
@@ -179,9 +180,9 @@ Common Java date formats:
 19/04/2026 16:30:47 → dd/MM/yyyy HH:mm:ss
 19-Apr-2026 16:30 → dd-MMM-yyyy HH:mm
 19 Apr 2026 04:30 PM → dd MMM yyyy hh:mm a
+19-APR-26 → dd-MMM-yy
+19/04/2026 → dd/MM/yyyy
 ```
-
-Date-only strings normally cannot be parsed by FireSMS and should leave both fields blank.
 
 ### `remarksPattern` and `remarksTemplate`
 
@@ -195,9 +196,11 @@ remarksTemplate = Ref: {{txnId}} | Account: {{account}}
 When notes should be exactly one captured group, use:
 
 ```text
-remarksPattern = {{remarks}}
+remarksPattern =
 remarksTemplate = {{remarks}}
 ```
+
+`remarksTemplate` always takes precedence, so leave `remarksPattern` empty whenever a template is set.
 
 Set both fields to empty strings when no useful remarks exist.
 

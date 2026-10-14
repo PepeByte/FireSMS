@@ -12,7 +12,7 @@ import java.util.concurrent.TimeUnit
  * the appropriate [NetworkType] constraint so retries only fire
  * when the device is on an allowed network.
  */
-suspend fun scheduleRetry(context: Context) {
+suspend fun scheduleRetry(context: Context, delayMillis: Long = TimeUnit.MINUTES.toMillis(2)) {
     val prefs = PreferencesManager(context)
     val policy = prefs.syncNetworkPolicy.first()
 
@@ -26,7 +26,7 @@ suspend fun scheduleRetry(context: Context) {
         .build()
 
     val workRequest = OneTimeWorkRequestBuilder<RetryWorker>()
-        .setInitialDelay(2, TimeUnit.MINUTES)
+        .setInitialDelay(delayMillis.coerceAtLeast(0), TimeUnit.MILLISECONDS)
         .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 1, TimeUnit.MINUTES)
         .setConstraints(constraints)
         .build()

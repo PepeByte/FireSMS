@@ -16,7 +16,6 @@ object Routes {
     const val UNPARSED = "unparsed"
     const val SETTINGS = "settings"
     const val EDIT_TRANSACTION = "edit_transaction/{smsLogId}"
-    const val TITLE_MAPPINGS = "title_mappings"
 
     fun ruleEdit(ruleId: String) = "rule_edit/$ruleId"
     fun newRule() = "rule_edit/new"
@@ -102,9 +101,6 @@ fun NavGraph(
                 smsLogId = smsLogId,
                 onBack = { navController.popBackStack() }
             )
-        }
-        composable(Routes.TITLE_MAPPINGS) {
-            TitleMappingsScreen(onBack = { navController.popBackStack() })
         }
     }
 }

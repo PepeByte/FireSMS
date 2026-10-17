@@ -22,6 +22,9 @@ interface SmsLogDao {
     @Query("SELECT * FROM sms_log WHERE status = :status ORDER BY received_at DESC")
     fun getByStatus(status: String): Flow<List<SmsLog>>
 
+    @Query("SELECT id, sms_hash FROM sms_log WHERE status = 'failed' AND firefly_id IS NULL ORDER BY received_at ASC")
+    suspend fun getRetryableFailedCandidates(): List<FailedTransactionRetryCandidate>
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(log: SmsLog): Long
 

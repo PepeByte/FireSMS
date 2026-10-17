@@ -116,6 +116,10 @@ You can configure retry network preference in **Settings**:
 
 Some Firefly III errors, such as invalid transaction data, may not be retryable until you fix the rule or configuration.
 
+On **Activity**, use **Retry failed (N)** and confirm to retry all failed transactions, regardless of the selected filter. This reparses their original SMS using your current rules and settings. Synced transactions, messages still processing, and unparsed messages are excluded. You can still retry a single failed transaction from its details.
+
+Bulk retries run in the background, follow your network preference, and show queued/progress status on Activity. Completed attempts are not replayed if the batch is interrupted; an interrupted in-flight attempt may run again. Temporary failures can return to the automatic retry queue. Changing the network preference updates unfinished retries; a request already in flight may finish first. Before retrying an uncertain failure (for example, a lost server response), check Firefly III to avoid creating a duplicate.
+
 ## Backup and restore
 
 Settings includes backup and restore.

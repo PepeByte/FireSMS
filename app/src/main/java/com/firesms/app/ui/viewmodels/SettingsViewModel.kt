@@ -3,6 +3,7 @@ package com.firesms.app.ui.viewmodels
 import android.app.Application
 import android.net.Uri
 import androidx.work.WorkManager
+import androidx.work.await
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.firesms.app.FireSmsApp
@@ -11,6 +12,8 @@ import com.firesms.app.data.local.HistoryRetention
 import com.firesms.app.data.remote.FireflyApi
 import com.firesms.app.data.remote.networkErrorMessage
 import com.firesms.app.worker.configureHistoryCleanup
+import com.firesms.app.worker.FailedTransactionRetryWorker
+import com.firesms.app.worker.updateFailedRetryNetworkPolicy
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.*
@@ -59,6 +62,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             prefs.setSyncNetworkPolicy(value)
             // Re-schedule retries with new network constraint
             com.firesms.app.worker.scheduleRetry(getApplication())
+            updateFailedRetryNetworkPolicy(getApplication())
         }
     }
 
@@ -92,9 +96,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             try {
                 val summary = backupRepository.importFrom(uri) {
                     WorkManager.getInstance(getApplication()).apply {
-                        cancelUniqueWork("firefly_retry")
-                        cancelUniqueWork("history_cleanup")
-                        cancelUniqueWork("history_cleanup_now")
+                        cancelUniqueWork("firefly_retry").await()
+                        cancelUniqueWork(FailedTransactionRetryWorker.WORK_NAME).await()
+                        cancelUniqueWork("history_cleanup").await()
+                        cancelUniqueWork("history_cleanup_now").await()
                     }
                 }
                 _dataTransferState.value = DataTransferState.Success(
@@ -130,6 +135,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             prefs.setFireflyToken(token)
             if (syncNetworkPolicy != null) {
                 prefs.setSyncNetworkPolicy(syncNetworkPolicy)
+                updateFailedRetryNetworkPolicy(getApplication())
             }
         }
     }

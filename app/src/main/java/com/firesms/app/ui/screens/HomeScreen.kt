@@ -26,6 +26,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.firesms.app.data.local.canRetryFailedTransaction
 import com.firesms.app.ui.components.FireSmsBottomBar
 import com.firesms.app.ui.components.FireSmsConfirmDialog
 import com.firesms.app.ui.components.FireSmsEmptyState
@@ -61,7 +62,20 @@ fun HomeScreen(
     val logs by viewModel.logs.collectAsState()
     val unparsedCount by viewModel.unparsedCount.collectAsState()
     val pendingCount by viewModel.pendingCount.collectAsState()
+    val retryWork by viewModel.failedRetryWork.collectAsState()
+    val isSchedulingRetry by viewModel.isSchedulingRetry.collectAsState()
+    val retryError by viewModel.retryError.collectAsState()
+    val isRetryingFailed = isSchedulingRetry || retryWork != null
+    val failedCount = logs.count { it.log.canRetryFailedTransaction }
+    val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
+
+    LaunchedEffect(retryError) {
+        retryError?.let { message ->
+            snackbarHostState.showSnackbar(message)
+            viewModel.clearRetryError()
+        }
+    }
 
     var showTestDialog by remember { mutableStateOf(false) }
     var testSender by remember { mutableStateOf("") }
@@ -69,6 +83,7 @@ fun HomeScreen(
     var detailLogId by remember { mutableStateOf<Long?>(null) }
     var activityFilter by rememberSaveable { mutableStateOf(ActivityFilter.ALL) }
     var showMoreMenu by remember { mutableStateOf(false) }
+    var showRetryConfirm by rememberSaveable { mutableStateOf(false) }
 
     val smsPermissionStatus = ContextCompat.checkSelfPermission(
         context,
@@ -92,6 +107,7 @@ fun HomeScreen(
 
     FireSmsScaffold(
         title = "Activity",
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         actions = {
             Box {
                 IconButton(onClick = { showMoreMenu = true }) {
@@ -131,9 +147,37 @@ fun HomeScreen(
                         hasSmsPermission = hasSmsPermission,
                         pendingCount = pendingCount,
                         unparsedCount = unparsedCount,
+                        failedCount = failedCount,
                         onNeedsAttention = onNavigateToUnparsed,
                         onPermissionSettings = onNavigateToSettings
                     )
+                }
+
+                if (failedCount > 0) {
+                    item(key = "retry-failed") {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            OutlinedButton(
+                                onClick = { showRetryConfirm = true },
+                                enabled = !isRetryingFailed && failedCount > 0,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.Refresh, contentDescription = null)
+                                Spacer(Modifier.width(8.dp))
+                                Text(when {
+                                    retryWork?.isRunning == true -> "Retrying ${retryWork?.completed} / ${retryWork?.total}"
+                                    isRetryingFailed -> "Retry queued"
+                                    else -> "Retry failed ($failedCount)"
+                                })
+                            }
+                            if (isRetryingFailed && retryWork?.isRunning != true) {
+                                Text(
+                                    "Retries start when your network preference allows.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
                 }
 
                 item {
@@ -183,6 +227,28 @@ fun HomeScreen(
 
 
 
+    if (showRetryConfirm) {
+        AlertDialog(
+            onDismissRequest = { showRetryConfirm = false },
+            title = { Text("Retry failed transactions?") },
+            text = {
+                Text("Retry all $failedCount failed transactions using your current rules and settings. Synced and unparsed messages are not included.")
+            },
+            confirmButton = {
+                Button(
+                    enabled = failedCount > 0 && !isRetryingFailed,
+                    onClick = {
+                        showRetryConfirm = false
+                        viewModel.retryAllFailedTransactions()
+                    }
+                ) { Text("Retry failed") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRetryConfirm = false }) { Text("Cancel") }
+            }
+        )
+    }
+
     if (showTestDialog) {
         AlertDialog(
             onDismissRequest = { showTestDialog = false },
@@ -228,6 +294,7 @@ fun HomeScreen(
             onDismiss = { detailLogId = null },
             onEditTransaction = onNavigateToEditTransaction,
             onRetry = { viewModel.retryFailedTransaction(item.log) },
+            retryEnabled = !isRetryingFailed,
             onDelete = { viewModel.deleteSmsLog(item.log); detailLogId = null }
         )
     }
@@ -245,6 +312,7 @@ private fun ActivityHealthPanel(
     hasSmsPermission: Boolean,
     pendingCount: Int,
     unparsedCount: Int,
+    failedCount: Int,
     onNeedsAttention: () -> Unit,
     onPermissionSettings: () -> Unit
 ) {
@@ -252,23 +320,25 @@ private fun ActivityHealthPanel(
     val needsAttention = unparsedCount > 0
     val containerColor = when {
         isError -> MaterialTheme.colorScheme.errorContainer
-        needsAttention -> MaterialTheme.colorScheme.tertiaryContainer
+        needsAttention || failedCount > 0 -> MaterialTheme.colorScheme.tertiaryContainer
         else -> MaterialTheme.colorScheme.primaryContainer
     }
     val contentColor = when {
         isError -> MaterialTheme.colorScheme.onErrorContainer
-        needsAttention -> MaterialTheme.colorScheme.onTertiaryContainer
+        needsAttention || failedCount > 0 -> MaterialTheme.colorScheme.onTertiaryContainer
         else -> MaterialTheme.colorScheme.onPrimaryContainer
     }
     val title = when {
         isError -> "SMS access is off"
         needsAttention -> "$unparsedCount ${if (unparsedCount == 1) "message needs" else "messages need"} your help"
+        failedCount > 0 -> "$failedCount ${if (failedCount == 1) "transaction needs" else "transactions need"} retrying"
         pendingCount > 0 -> "$pendingCount ${if (pendingCount == 1) "transaction is" else "transactions are"} waiting to sync"
         else -> "Everything is up to date"
     }
     val message = when {
         isError -> "Allow SMS access so FireSMS can receive bank messages."
         needsAttention -> "Teach FireSMS how to understand these messages."
+        failedCount > 0 -> "Review the errors and retry after fixing your connection, rules, or settings."
         pendingCount > 0 -> "FireSMS will retry automatically when your connection is available."
         else -> "FireSMS is listening for matching bank messages."
     }
@@ -292,7 +362,7 @@ private fun ActivityHealthPanel(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            if (isError || needsAttention) {
+            if (isError || needsAttention || failedCount > 0) {
                 Icon(Icons.Default.Warning, contentDescription = null)
             }
             Column(modifier = Modifier.weight(1f)) {
@@ -420,6 +490,7 @@ private fun SmsLogDetailDialog(
     onDismiss: () -> Unit,
     onEditTransaction: (Long) -> Unit,
     onRetry: () -> Unit,
+    retryEnabled: Boolean,
     onDelete: () -> Unit
 ) {
     val log = item.log
@@ -457,10 +528,11 @@ private fun SmsLogDetailDialog(
                 DetailRow("Status") {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         FireSmsStatusPill(label = label, color = color)
-                        if (log.status == "failed") {
+                        if (log.canRetryFailedTransaction) {
                             Spacer(Modifier.width(8.dp))
                             OutlinedButton(
                                 onClick = onRetry,
+                                enabled = retryEnabled,
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
                             ) {
                                 Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))

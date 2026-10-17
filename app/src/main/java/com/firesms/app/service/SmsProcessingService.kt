@@ -89,24 +89,8 @@ class SmsProcessingService : Service() {
         val smsLogDao = db.smsLogDao()
 
         if (retryLogId != null) {
-            val retryLog = smsLogDao.getById(retryLogId)
-            if (retryLog == null) {
-                Log.w(TAG, "Retry requested for missing SMS log: $retryLogId")
-                return
-            }
-            if (!parser.senderMatchesAnyEnabledRule(retryLog.sender)) {
-                smsLogDao.updateStatus(
-                    retryLog.id,
-                    "unparsed",
-                    processedAt = System.currentTimeMillis(),
-                    errorMessage = "No enabled parser rule matches sender"
-                )
-                return
-            }
-            // Manual retry re-uses the existing log row; the new-SMS path deduplicates by hash.
-            db.pendingTransactionDao().deleteBySmsLogId(retryLog.id)
-            smsLogDao.updateStatus(retryLog.id, "pending")
-            processor.process(retryLog)
+            // Manual retry re-uses the existing log row and skips already-synced transactions.
+            processor.retryFailed(retryLogId)
             return
         }
 

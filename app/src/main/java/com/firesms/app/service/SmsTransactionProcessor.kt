@@ -3,6 +3,7 @@ package com.firesms.app.service
 import android.content.Context
 import com.firesms.app.data.local.AppDatabase
 import com.firesms.app.data.local.PreferencesManager
+import com.firesms.app.data.local.canRetryFailedTransaction
 import com.firesms.app.data.local.encode
 import com.firesms.app.data.local.entity.PendingTransaction
 import com.firesms.app.data.local.entity.SmsLog
@@ -40,6 +41,18 @@ class SmsTransactionProcessor(private val context: Context) {
     private val prefs = PreferencesManager(context)
     private val parser = SmsParser(db.parserRuleDao())
     private val titleMappingResolver = TitleMappingResolver(db.titleMappingRuleDao())
+
+    /** Re-read under DataMaintenanceLock so stale UI/queued retries cannot resend known successes. */
+    suspend fun retryFailed(logId: Long, expectedSmsHash: String? = null): Outcome? {
+        val log = smsLogDao.getById(logId) ?: return null
+        if (!log.canRetryFailedTransaction) return null
+        if (expectedSmsHash != null && log.smsHash != expectedSmsHash) return null
+
+        pendingDao.deleteBySmsLogId(log.id)
+        // Keep the failed status until an outcome is recorded. If background work is stopped,
+        // the item remains retryable instead of getting stranded in "pending".
+        return process(log)
+    }
 
     suspend fun process(log: SmsLog): Outcome = try {
         submit(log)

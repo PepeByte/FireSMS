@@ -106,7 +106,39 @@ A release build can be created with:
 
 The current project enables minification for release builds. A publishable release APK/AAB should be signed with a private Android signing key. Do not commit keystores, signing passwords, or `keystore.properties`.
 
-Automatic release publishing is not configured yet.
+### Publish a GitHub Release
+
+`.github/workflows/android-release.yml` builds, tests, lints, and signs a release APK, then uploads it and `SHA256SUMS` to a GitHub Release titled `Release vX.Y.Z`.
+
+First, add these repository secrets under **Settings → Secrets and variables → Actions**:
+
+| Secret | Value |
+|---|---|
+| `RELEASE_KEYSTORE_BASE64` | Base64-encoded release keystore (`base64 -w 0 release.jks` on Linux). |
+| `RELEASE_KEYSTORE_PASSWORD` | Keystore password. |
+| `RELEASE_KEY_ALIAS` | Signing key alias. |
+| `RELEASE_KEY_PASSWORD` | Signing key password. |
+
+Use your existing release signing key if the app has already been distributed. Keep this key backed up privately: Android updates must use the same signing key. If you do not have a key yet, create one locally (this prompts for passwords):
+
+```bash
+keytool -genkeypair -v -keystore "$HOME/firesms-release.jks" \
+  -alias firesms -keyalg RSA -keysize 2048 -validity 10000
+```
+
+Update `versionName` and increment `versionCode` in `app/build.gradle.kts`, then commit with a title exactly like `Release v1.0.2` and push to `main`:
+
+```bash
+git add app/build.gradle.kts # Also stage any other release changes.
+git commit -m "Release v1.0.2"
+git push origin main
+```
+
+The workflow must be included in the pushed source. It checks the **latest commit in the push**; other commit titles are skipped. The version in the title must match `versionName` (for example, `Release v1.0.2` for `1.0.2`). Optional commit-body text is allowed.
+
+The action automatically creates tag `v1.0.2` at that exact commit and publishes the GitHub Release with the signed APK and checksum. **No manual tag creation or push is needed.** Tag-only pushes do not trigger this workflow.
+
+Adding the workflow does not retroactively release earlier commits. Re-running a successful workflow replaces its APK/checksum assets without overwriting existing release notes. If the version tag already points at a different commit, publishing fails: use a new version instead of moving an existing release tag.
 
 ## Common problems
 

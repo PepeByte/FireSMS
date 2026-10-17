@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FireSMS talks to a Firefly III instance the user hosts themselves. Those instances are
+  commonly reachable only over plain HTTP on a LAN/tailnet, or over HTTPS with a certificate
+  signed by a private CA (self-hosted Caddy, Traefik, mkcert, a NAS, ...). Android blocks both
+  by default, which surfaced as "CLEARTEXT communication ... not permitted by network security
+  policy" and "PKIX path building failed" — errors that made FireSMS look broken next to other
+  Firefly clients that do allow them.
+
+  This is a deliberate product decision, tracked here so it is not silently "fixed" later:
+  the app performs no browsing, renders no remote web content, and never loads third-party
+  assets, so relaxing these rules cannot expose unrelated traffic. The Firefly III instance and
+  its access token are chosen by the user, who already trusts that server.
+-->
+<network-security-config xmlns:tools="http://schemas.android.com/tools">
+    <!-- tools:ignore below acknowledges the intended cleartext + private-CA support. -->
+    <base-config
+        cleartextTrafficPermitted="true"
+        tools:ignore="InsecureBaseConfiguration">
+        <trust-anchors>
+            <certificates src="system" />
+            <!-- Private CAs the user installed on the device, e.g. for self-hosted HTTPS. -->
+            <certificates src="user" tools:ignore="AcceptsUserCertificates" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

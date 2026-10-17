@@ -99,7 +99,7 @@ See [PARSER_RULES.md](PARSER_RULES.md).
 
 ## Firefly III integration
 
-`FireflyApi` uses Ktor and a bearer token. It supports:
+`FireflyApi` uses Ktor's OkHttp engine and a bearer token. It supports:
 
 - testing connection with `/api/v1/about`,
 - creating transactions,
@@ -107,7 +107,31 @@ See [PARSER_RULES.md](PARSER_RULES.md).
 - fetching transaction details,
 - account/category/budget/autocomplete lookups.
 
-Client errors are represented as `FireflyError`. Network/server failures are represented as `FireflyUnavailable` and may be retried.
+HTTP behaviour:
+
+- A single `HttpClient` is shared for the process lifetime, so connections and TLS sessions are
+  reused across the several calls a screen makes. `FireflyApi.close()` is a no-op kept for call sites.
+- Timeouts are 45 s request and read, with a 15 s connect timeout. `socketTimeoutMillis` must be set
+  explicitly: Ktor's OkHttp engine only overrides OkHttp's default read timeout when it is present.
+  Without it, requests were silently capped at OkHttp's 10 s read timeout, so a slow but healthy
+  Firefly III failed with `SocketTimeoutException`.
+- The server address is normalised (`apiUrl`) and accepts a trailing slash or newline, a missing
+  scheme, and a pasted `/api` or `/api/v1` suffix. Access tokens are trimmed.
+- `testConnection` requires a successful JSON response under an `/api/` path. Firefly redirects
+  unauthenticated requests to `/login`, and following that redirect previously made a bad token
+  look like a successful connection.
+
+Client errors are represented as `FireflyError`. Network/server failures are represented as
+`FireflyUnavailable` and may be retried. Transport failures are converted to user-actionable text
+by `networkErrorMessage` rather than surfaced as raw Ktor/OkHttp exceptions.
+
+### Transport restrictions
+
+Self-hosted Firefly III instances are commonly reachable only over plain HTTP on a LAN or tailnet,
+and often use HTTPS with a certificate from a private CA. `res/xml/network_security_config.xml`
+permits cleartext traffic and trusts user-installed CA certificates so those setups work. The app
+loads no third-party or remote web content, so this does not widen exposure for unrelated traffic.
+Both lint warnings for this configuration are acknowledged deliberately in that file.
 
 ## Retry queue
 
@@ -125,7 +149,7 @@ FireSMS uses:
 - Room database: SMS logs, pending transactions, parser rules, title mappings,
 - DataStore preferences: Firefly URL/token, onboarding, sync policy, history retention.
 
-Current Room database version: `6`.
+Current Room database version: `7`.
 
 ## Backup and restore
 

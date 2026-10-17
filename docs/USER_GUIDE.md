@@ -28,7 +28,20 @@ It is not a bank app and does not connect to your bank directly. It only works w
    https://firefly.example.com
    ```
 
-6. Enter your Firefly III personal access token.
+   Use the address you open in a browser. Do not add `/api`. FireSMS also tolerates a trailing
+   slash, a missing `http://`/`https://`, and a pasted `/api` suffix.
+
+   If Firefly III is served under a subpath, include it:
+
+   ```text
+   https://example.com/firefly
+   ```
+
+   Plain HTTP and HTTPS with a private-CA certificate (for example self-hosted Caddy, Traefik, or
+   mkcert) are both supported. For a private CA, install that certificate authority as a trusted
+   certificate on the Android device first; FireSMS trusts certificates installed that way.
+
+6. Enter your Firefly III personal access token. Pasting it with a trailing newline or spaces is safe.
 7. Use **Save and test** to verify the connection.
 
 ## Creating a Firefly III token

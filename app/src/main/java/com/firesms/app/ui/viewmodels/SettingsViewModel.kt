@@ -9,6 +9,7 @@ import com.firesms.app.FireSmsApp
 import com.firesms.app.data.backup.BackupRepository
 import com.firesms.app.data.local.HistoryRetention
 import com.firesms.app.data.remote.FireflyApi
+import com.firesms.app.data.remote.networkErrorMessage
 import com.firesms.app.worker.configureHistoryCleanup
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -148,9 +149,8 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _testResult.value = TestResult.Failure(e.message ?: "Unknown error")
+                _testResult.value = TestResult.Failure(networkErrorMessage(e))
             } finally {
-                api.close()
                 _isTesting.value = false
             }
         }

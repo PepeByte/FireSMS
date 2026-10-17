@@ -21,3 +21,9 @@ This project currently does not have a formal release history.
 - Rule editor accounts are labelled by transaction type (Paid from / Paid to, Received into / Received from, Moved from / Moved to), show a "source → destination" preview, and both fields search Firefly III accounts with a found/not-found check. The other account's Firefly ID is now stored (database version 7).
 - Firefly account lists are fetched across all pages.
 - The rule editor now validates templates, groups, and date formats with the same checks as the JSON importer, and refuses to overwrite an existing rule ID.
+- Fixed: the HTTP client no longer used OkHttp's 10-second default read timeout. Ktor only applies `socketTimeoutMillis` (never set) to that timeout, so a slow but healthy Firefly III answered too late and the app failed with "Socket timeout has expired". Requests now allow 45 seconds while connecting within 15.
+- Fixed: plain-HTTP and self-signed/private-CA Firefly III servers were rejected by Android ("CLEARTEXT communication ... not permitted" and "PKIX path building failed"). A network security config now permits both, which self-hosted LAN and tailnet setups need.
+- Fixed: one HTTP client is reused for the process instead of building a new engine and thread pool per request, so screens that make several calls no longer pay a fresh TCP/TLS handshake each time.
+- Fixed: "Test connection" reported success for an invalid token, because Firefly's 302 redirect to `/login` was followed and its 200 page counted as success.
+- Fixed: transport failures now show an actionable message (unreachable host, timeout, untrusted certificate, whitespace in the token) instead of raw exceptions such as `SocketTimeoutException`.
+- Fixed: a pasted server URL with a trailing newline, trailing slash, missing scheme, or an extra `/api`/`/api/v1` suffix is normalised instead of failing to parse. Access tokens are trimmed before use.

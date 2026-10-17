@@ -215,22 +215,23 @@ fun buildCreateRequest(
 
 class FireflyApi(private val token: String) {
 
-    private val client = HttpClient {
-        install(ContentNegotiation) {
-            json(Json {
-                ignoreUnknownKeys = true
-                isLenient = true
-            })
-        }
-        install(HttpTimeout) {
-            requestTimeoutMillis = 30_000
-            connectTimeoutMillis = 10_000
-        }
-        defaultRequest {
-            header("Authorization", "Bearer $token")
-            header("Accept", "application/json")
-            contentType(ContentType.Application.Json)
-        }
+    /**
+     * Tokens are pasted out of Firefly's UI and password managers, which routinely add a trailing
+     * newline or spaces. OkHttp rejects such a value before sending it, which surfaced as a
+     * cryptic "IllegalHeaderValueException" instead of an authentication problem.
+     */
+    private val authToken = token.trim()
+
+    /**
+     * One client for the whole process so that connections and TLS sessions are reused. Creating a
+     * client per call forced a new TCP + TLS handshake for every request, which made screens that
+     * issue several calls in a row noticeably slow on a phone network.
+     */
+    private val client = sharedClient
+
+    private fun HttpRequestBuilder.authorize() {
+        header(HttpHeaders.Authorization, "Bearer $authToken")
+        accept(ContentType.Application.Json)
     }
 
     suspend fun createTransaction(
@@ -241,24 +242,39 @@ class FireflyApi(private val token: String) {
         return createTransactionRaw(baseUrl, buildCreateRequest(transaction, externalId))
     }
 
-    /** Returns whether the server accepted the token; network errors propagate to the caller. */
+    /**
+     * Returns whether the server accepted the token; network errors propagate to the caller.
+     *
+     * Firefly answers an unauthenticated request with a 302 to /login, and the HTTP client follows
+     * redirects, so checking only the final status reported "connected" for a wrong token. The
+     * redirect target is inspected instead: a real API response never lands on an HTML login page.
+     * Firefly may be installed under a subpath (e.g. https://host/firefly), so the suffix is what
+     * matters, not a leading slash.
+     */
     suspend fun testConnection(baseUrl: String): Boolean {
-        val url = "${baseUrl.trimEnd('/')}/api/v1/about"
-        return client.get(url).status.isSuccess()
+        val url = apiUrl(baseUrl, "about")
+        val response = client.get(url) { authorize() }
+        return response.status.isSuccess() &&
+            response.request.url.encodedPath.contains("/api/") &&
+            response.contentType()?.match(ContentType.Application.Json) == true
     }
 
     suspend fun createTransactionRaw(
         baseUrl: String,
         payload: TransactionRequest
     ): String {
-        val url = "${baseUrl.trimEnd('/')}/api/v1/transactions"
+        val url = apiUrl(baseUrl, "transactions")
         try {
-            val response = client.post(url) { setBody(payload) }
+            val response = client.post(url) {
+                authorize()
+                contentType(ContentType.Application.Json)
+                setBody(payload)
+            }
             if (response.status.value in 400..499) {
-                throw FireflyError(response.status.value, response.bodyAsText())
+                throw FireflyError(response.status.value, response.bodyAsText().abbreviate())
             }
             if (!response.status.isSuccess()) {
-                throw FireflyUnavailable(response.status.value, response.bodyAsText())
+                throw FireflyUnavailable(response.status.value, response.bodyAsText().abbreviate())
             }
             val txResponse = response.body<TransactionResponse>()
             return txResponse.data.id
@@ -268,48 +284,47 @@ class FireflyApi(private val token: String) {
             throw e
         } catch (e: Exception) {
             // Network/timeout/etc — treat as unavailable for retry
-            throw FireflyUnavailable(0, e.message ?: e.toString())
+            throw FireflyUnavailable(0, networkErrorMessage(e))
         }
     }
 
     suspend fun getTransaction(baseUrl: String, transactionId: String): FireflyTransactionResponse {
-        val url = "${baseUrl.trimEnd('/')}/api/v1/transactions/$transactionId"
-        val response = client.get(url)
+        val url = apiUrl(baseUrl, "transactions/$transactionId")
+        val response = client.get(url) { authorize() }
         if (!response.status.isSuccess()) {
-            throw FireflyUnavailable(response.status.value, response.bodyAsText())
+            throw FireflyUnavailable(response.status.value, response.bodyAsText().abbreviate())
         }
         return response.body()
     }
 
     suspend fun getCategories(baseUrl: String): List<CategoryResource> {
-        val url = "${baseUrl.trimEnd('/')}/api/v1/categories"
-        val response = client.get(url)
+        val url = apiUrl(baseUrl, "categories")
+        val response = client.get(url) { authorize() }
         if (!response.status.isSuccess()) {
-            throw FireflyUnavailable(response.status.value, response.bodyAsText())
+            throw FireflyUnavailable(response.status.value, response.bodyAsText().abbreviate())
         }
         val result = response.body<CategoryListResponse>()
         return result.data
     }
 
     suspend fun getBudgets(baseUrl: String): List<BudgetResource> {
-        val url = "${baseUrl.trimEnd('/')}/api/v1/budgets"
-        val response = client.get(url)
+        val url = apiUrl(baseUrl, "budgets")
+        val response = client.get(url) { authorize() }
         if (!response.status.isSuccess()) {
-            throw FireflyUnavailable(response.status.value, response.bodyAsText())
+            throw FireflyUnavailable(response.status.value, response.bodyAsText().abbreviate())
         }
         val result = response.body<BudgetListResponse>()
         return result.data
     }
 
     suspend fun getAutocompleteTransactions(baseUrl: String): List<AutocompleteTransactionItem> {
-        val url = "${baseUrl.trimEnd('/')}/api/v1/autocomplete/transactions"
-        val response = client.get(url)
+        val url = apiUrl(baseUrl, "autocomplete/transactions")
+        val response = client.get(url) { authorize() }
         if (!response.status.isSuccess()) {
-            throw FireflyUnavailable(response.status.value, response.bodyAsText())
+            throw FireflyUnavailable(response.status.value, response.bodyAsText().abbreviate())
         }
         // Firefly autocomplete endpoints return bare JSON arrays (no "data" wrapper).
-        val json = Json { ignoreUnknownKeys = true; isLenient = true }
-        return json.decodeFromString(response.bodyAsText())
+        return fireflyJson.decodeFromString(response.bodyAsText())
     }
 
     suspend fun updateTransaction(
@@ -317,13 +332,17 @@ class FireflyApi(private val token: String) {
         transactionId: String,
         request: TransactionUpdateRequest
     ): FireflyTransactionResponse {
-        val url = "${baseUrl.trimEnd('/')}/api/v1/transactions/$transactionId"
-        val response = client.put(url) { setBody(request) }
+        val url = apiUrl(baseUrl, "transactions/$transactionId")
+        val response = client.put(url) {
+            authorize()
+            contentType(ContentType.Application.Json)
+            setBody(request)
+        }
         if (response.status.value in 400..499) {
-            throw FireflyError(response.status.value, response.bodyAsText())
+            throw FireflyError(response.status.value, response.bodyAsText().abbreviate())
         }
         if (!response.status.isSuccess()) {
-            throw FireflyUnavailable(response.status.value, response.bodyAsText())
+            throw FireflyUnavailable(response.status.value, response.bodyAsText().abbreviate())
         }
         return response.body()
     }
@@ -334,10 +353,10 @@ class FireflyApi(private val token: String) {
         var page = 1
         var totalPages: Int
         do {
-            val url = "${baseUrl.trimEnd('/')}/api/v1/accounts?type=$type&page=$page"
-            val response = client.get(url)
+            val url = apiUrl(baseUrl, "accounts?type=$type&page=$page")
+            val response = client.get(url) { authorize() }
             if (!response.status.isSuccess()) {
-                throw FireflyUnavailable(response.status.value, response.bodyAsText())
+                throw FireflyUnavailable(response.status.value, response.bodyAsText().abbreviate())
             }
             val result = response.body<AccountListResponse>()
             accounts += result.data
@@ -347,13 +366,88 @@ class FireflyApi(private val token: String) {
         return accounts
     }
 
-    fun close() {
-        client.close()
-    }
+    /**
+     * The HTTP client is shared for the lifetime of the process, so callers that used to release
+     * a per-call client have nothing to do. Kept so existing call sites stay valid.
+     */
+    fun close() = Unit
 
     private companion object {
         /** Safety cap on pagination: 100 pages of Firefly's default 50 accounts. */
         const val MAX_ACCOUNT_PAGES = 100
+
+        val fireflyJson = Json {
+            ignoreUnknownKeys = true
+            isLenient = true
+        }
+
+        val sharedClient: HttpClient by lazy {
+            HttpClient(io.ktor.client.engine.okhttp.OkHttp) {
+                expectSuccess = false
+                install(ContentNegotiation) { json(fireflyJson) }
+                install(HttpTimeout) {
+                    // Ktor's OkHttp engine only overrides OkHttp's read timeout when
+                    // socketTimeoutMillis is set. Leaving it out silently kept OkHttp's 10 s
+                    // default, so a slow (but healthy) self-hosted Firefly failed with
+                    // "Socket timeout has expired" long before the 30 s request timeout.
+                    requestTimeoutMillis = 45_000
+                    connectTimeoutMillis = 15_000
+                    socketTimeoutMillis = 45_000
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Builds an API URL from the address the user typed. Pasting the address out of a browser
+ * commonly brings a trailing slash, a `/api` suffix (some users copy the docs' base URL), or a
+ * trailing newline from a password manager; all of those used to fail deep inside the HTTP stack
+ * with errors that never mentioned the URL.
+ */
+internal fun apiUrl(baseUrl: String, path: String): String {
+    var base = baseUrl.trim().trimEnd('/')
+    if (!base.startsWith("http://", ignoreCase = true) &&
+        !base.startsWith("https://", ignoreCase = true)
+    ) {
+        base = "http://$base"
+    }
+    if (base.endsWith("/api/v1", ignoreCase = true)) base = base.dropLast(7)
+    else if (base.endsWith("/api", ignoreCase = true)) base = base.dropLast(4)
+    return "$base/api/v1/${path.trimStart('/')}"
+}
+
+/** Keeps Firefly's HTML error pages from filling the activity log. */
+private fun String.abbreviate(limit: Int = 300): String =
+    if (length <= limit) this else take(limit).trimEnd() + "…"
+
+/**
+ * Converts a transport failure into an explanation the user can act on. Ktor and OkHttp
+ * exceptions leak implementation detail ("Socket timeout has expired [url=…]") that reads like
+ * an app crash rather than a configuration problem.
+ */
+fun networkErrorMessage(error: Throwable): String {
+    val chain = generateSequence(error) { it.cause }.toList()
+    fun causedBy(vararg simpleNames: String) =
+        chain.any { cause -> simpleNames.any { cause.javaClass.simpleName == it } }
+    val detail = chain.firstNotNullOfOrNull { it.message?.takeIf(String::isNotBlank) }.orEmpty()
+
+    return when {
+        causedBy("UnknownHostException") ->
+            "Can't find that server. Check the address and your internet connection."
+        causedBy("ConnectException", "NoRouteToHostException") ->
+            "Can't reach that server. Check the address, the port, and that Firefly III is running."
+        causedBy("SocketTimeoutException", "HttpRequestTimeoutException", "TimeoutCancellationException") ->
+            "Firefly took too long to answer. Check that the server is responsive, then try again."
+        causedBy("SSLHandshakeException", "SSLPeerUnverifiedException", "CertPathValidatorException") ->
+            "Firefly's TLS certificate isn't trusted on this device. Install its certificate " +
+                "authority, or use a certificate Android already trusts."
+        causedBy("IllegalHeaderValueException") ->
+            "The server URL or access token contains spaces or line breaks. Re-enter both without " +
+                "extra whitespace."
+        causedBy("IllegalArgumentException") && detail.contains("URL", ignoreCase = true) ->
+            "That server address isn't a valid URL. Include http:// or https://."
+        else -> detail.ifBlank { error.javaClass.simpleName }
     }
 }
 

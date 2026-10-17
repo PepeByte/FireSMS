@@ -334,7 +334,7 @@ fun SettingsScreen(
 
             FireSmsSection(title = "About") {
                 Text(
-                    "FireSMS v1.0.0",
+                    "FireSMS v1.0.1",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

@@ -2,9 +2,14 @@
 
 All notable changes to FireSMS will be documented in this file.
 
-This project currently does not have a formal release history.
+## 1.0.2 — 2026-10-17
 
-## Unreleased
+- Added **Retry failed (N)** on Activity to retry all failed transactions with the current rules and settings after confirmation.
+- Bulk retries run in the background, respect the network preference, and display queue/progress status without replaying completed attempts after interruption.
+- Added an automated release workflow that tests, lints, builds, and signs the APK, then publishes it with a SHA-256 checksum on GitHub.
+- Android CI now runs on pushes to all branches.
+
+## 1.0.1
 
 - Initial open-source documentation.
 - Android CI workflow for checks on pull requests and main-branch pushes.

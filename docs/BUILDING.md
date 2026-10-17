@@ -173,7 +173,7 @@ Try:
 
 ## CI expectations
 
-Pull requests and pushes to `main` should pass:
+Pull requests and pushes to any branch should pass:
 
 ```bash
 ./gradlew testDebugUnitTest lintDebug assembleDebug

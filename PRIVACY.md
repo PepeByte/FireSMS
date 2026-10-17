@@ -38,14 +38,24 @@ When a message is successfully parsed, FireSMS sends transaction data to the Fir
 
 ## Transport security
 
-FireSMS only ever sends this data to the server address you configure, and it sends nothing to the
-project's maintainers or any third party.
+FireSMS only sends financial data and your Firefly III access token to the server address you
+configure. These are not sent to the project's maintainers, GitHub, or any other third party.
 
 Because Firefly III is self-hosted, FireSMS accepts both HTTPS and plain HTTP server addresses, and
 trusts certificate authorities you install on the device. Plain HTTP means the token and transaction
 data are not encrypted on the wire; anyone who can observe that network path could read or modify
 them. Prefer HTTPS, especially over untrusted Wi-Fi or the public internet. Use plain HTTP only on a
 network you trust, such as a LAN or a private VPN/tailnet.
+
+## Update checks
+
+FireSMS automatically checks the public `PepeByte/FireSMS` GitHub releases API for a newer stable
+version approximately once a day when connected. You can also check manually in Settings.
+These unauthenticated HTTPS requests send no SMS messages, transaction data, Firefly server address,
+or access token. GitHub receives normal connection metadata, such as your IP address and the
+FireSMS update-checker User-Agent. The app stores release information and the last successful check
+on your device. Opening a release page uses your browser; downloading and installing an APK are
+user-initiated, never automatic.
 
 ## Backups
 

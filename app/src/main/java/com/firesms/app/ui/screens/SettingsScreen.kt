@@ -11,10 +11,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.firesms.app.BuildConfig
 import com.firesms.app.data.local.HistoryRetention
 import com.firesms.app.ui.components.FireSmsBottomBar
 import com.firesms.app.ui.components.FireSmsPreferenceOption
@@ -28,6 +30,7 @@ import com.firesms.app.ui.viewmodels.SettingsViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -44,6 +47,10 @@ fun SettingsScreen(
     val testResult by viewModel.testResult.collectAsState()
     val isTesting by viewModel.isTesting.collectAsState()
     val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
+    val updateSnapshot by viewModel.updateSnapshot.collectAsState()
+    val updateCheckState by viewModel.updateCheckState.collectAsState()
+    val coroutineScope = rememberCoroutineScope()
 
     var urlInput by remember { mutableStateOf(url) }
     var tokenInput by remember { mutableStateOf(token) }
@@ -332,9 +339,67 @@ fun SettingsScreen(
                 }
             }
 
+            FireSmsSection(
+                title = "App updates",
+                subtitle = "Checks GitHub daily for stable releases. Nothing downloads automatically."
+            ) {
+                Text("Installed version: ${BuildConfig.VERSION_NAME}")
+                val release = updateSnapshot.availableRelease
+                if (release != null) {
+                    FireSmsResultBanner(
+                        text = "FireSMS ${release.version} is available.",
+                        isError = false
+                    )
+                    Button(onClick = {
+                        try {
+                            uriHandler.openUri(release.pageUrl)
+                        } catch (_: Exception) {
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("No browser available to open GitHub.")
+                            }
+                        }
+                    }) {
+                        Text("View release on GitHub")
+                    }
+                    Text(
+                        "Review the release and download its APK when you're ready. Android will ask you to approve installation.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                OutlinedButton(
+                    onClick = viewModel::checkForUpdates,
+                    enabled = updateCheckState != SettingsViewModel.UpdateCheckState.Checking
+                ) {
+                    Text(if (updateCheckState == SettingsViewModel.UpdateCheckState.Checking) "Checking…" else "Check for updates")
+                }
+                when (val state = updateCheckState) {
+                    SettingsViewModel.UpdateCheckState.UpToDate -> {
+                        if (release == null) {
+                            FireSmsResultBanner(text = "You're up to date. No newer stable release is available.", isError = false)
+                        }
+                    }
+                    is SettingsViewModel.UpdateCheckState.Failure ->
+                        FireSmsResultBanner(text = state.message, isError = true)
+                    else -> Unit
+                }
+                if (updateSnapshot.lastCheckedAt > 0) {
+                    Text(
+                        "Last successful check: ${java.text.DateFormat.getDateTimeInstance().format(Date(updateSnapshot.lastCheckedAt))}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Text(
+                    "Enable notifications to receive update alerts. Background checks may be delayed by Android battery or network restrictions.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
             FireSmsSection(title = "About") {
                 Text(
-                    "FireSMS v1.0.2",
+                    "FireSMS v${BuildConfig.VERSION_NAME}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

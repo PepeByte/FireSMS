@@ -26,6 +26,7 @@ com.firesms.app.data
   backup/                   Export and restore JSON backups
   local/                    Room database, DAOs, DataStore preferences
   remote/                   Firefly III API client and DTOs
+  update/                   GitHub release checks and device-local update metadata
 
 com.firesms.app.domain
   model/                    Parsed transaction models
@@ -46,6 +47,7 @@ com.firesms.app.ui
 com.firesms.app.worker
   RetryWorker.kt            Retries queued Firefly submissions
   HistoryCleanupWorker.kt   Local history retention cleanup
+  AppUpdateWorker.kt        Daily stable-release checks and update notifications
 ```
 
 ## Application startup
@@ -54,7 +56,8 @@ com.firesms.app.worker
 
 - `AppDatabase`
 - `PreferencesManager`
-- history cleanup scheduling
+- `UpdateRepository` and app-update notification channel
+- history cleanup and daily app-update scheduling
 
 `MainActivity` initializes Compose, creates the nav controller, and starts at onboarding. The onboarding screen auto-skips once completed.
 
@@ -141,6 +144,26 @@ Failed transaction creates caused by network/server unavailability are stored in
 - Wi-Fi only.
 
 Retries use exponential backoff and update the related SMS log.
+
+## App updates
+
+`GitHubReleaseClient` uses a separate unauthenticated Ktor client to query the public
+`PepeByte/FireSMS` `/releases/latest` API over HTTPS. It rejects drafts/prereleases, compares stable
+numeric versions (not lexicographic strings), never offers downgrades, and derives trusted release
+page URLs from validated tags. It never receives Firefly credentials. Missing releases are handled
+as no update; rate limits, transport failures, and malformed responses are errors.
+
+`UpdateRepository` serializes manual/background checks and notification cleanup. A separate
+`app_updates` DataStore preserves release availability, successful-check time, and the last notified
+version; this device-local metadata is not part of exported financial backups. Failed checks leave
+the previous successful result intact, and cached offers are hidden after upgrading.
+
+`AppUpdateWorker` is unique daily connected-network work using `KEEP` to preserve its cadence. It
+can run immediately after first scheduling; Android may defer it. Failures use bounded hourly
+exponential retries before waiting for the next period. An enabled notification is posted once per
+new version; denied/disabled notifications are not marked delivered. Settings supports manual
+checks and cached availability even when notifications are disabled. Release links open externally;
+no APK download or installation is performed by the app.
 
 ## Local storage
 

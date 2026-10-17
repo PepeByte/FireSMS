@@ -2,6 +2,12 @@
 
 All notable changes to FireSMS will be documented in this file.
 
+## Unreleased
+
+- Added daily checks for newer stable GitHub releases, with one notification per version and no automatic downloads or installation.
+- Added **Settings → App updates** with manual checking, cached update availability, last successful check time, and a link to the official release page.
+- Documented update-check privacy and manual APK installation.
+
 ## 1.0.2 — 2026-10-17
 
 - Added **Retry failed (N)** on Activity to retry all failed transactions with the current rules and settings after confirmation.

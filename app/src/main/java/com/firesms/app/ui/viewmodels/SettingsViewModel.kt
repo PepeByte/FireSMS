@@ -11,6 +11,7 @@ import com.firesms.app.data.backup.BackupRepository
 import com.firesms.app.data.local.HistoryRetention
 import com.firesms.app.data.remote.FireflyApi
 import com.firesms.app.data.remote.networkErrorMessage
+import com.firesms.app.data.update.UpdateSnapshot
 import com.firesms.app.worker.configureHistoryCleanup
 import com.firesms.app.worker.FailedTransactionRetryWorker
 import com.firesms.app.worker.updateFailedRetryNetworkPolicy
@@ -36,6 +37,36 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     val historyRetention: StateFlow<String> = prefs.historyRetention
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), HistoryRetention.NEVER.value)
+
+    val updateSnapshot = app.updateRepository.state
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), UpdateSnapshot())
+
+    sealed interface UpdateCheckState {
+        data object Checking : UpdateCheckState
+        data object UpToDate : UpdateCheckState
+        data class Failure(val message: String) : UpdateCheckState
+    }
+
+    private val _updateCheckState = MutableStateFlow<UpdateCheckState?>(null)
+    val updateCheckState = _updateCheckState.asStateFlow()
+
+    fun checkForUpdates() {
+        if (_updateCheckState.value == UpdateCheckState.Checking) return
+        _updateCheckState.value = UpdateCheckState.Checking
+        viewModelScope.launch {
+            try {
+                val release = app.updateRepository.checkForUpdates()
+                _updateCheckState.value = if (release == null) UpdateCheckState.UpToDate else null
+            } catch (error: CancellationException) {
+                _updateCheckState.value = null
+                throw error
+            } catch (error: Exception) {
+                _updateCheckState.value = UpdateCheckState.Failure(
+                    error.message ?: "Couldn't check for updates. Try again later."
+                )
+            }
+        }
+    }
 
     sealed class TestResult {
         data object Success : TestResult()

@@ -11,6 +11,7 @@ import com.firesms.app.data.backup.BackupRepository
 import com.firesms.app.data.local.HistoryRetention
 import com.firesms.app.data.remote.FireflyApi
 import com.firesms.app.data.remote.networkErrorMessage
+import com.firesms.app.data.update.UpdateSnapshot
 import com.firesms.app.worker.configureHistoryCleanup
 import com.firesms.app.worker.FailedTransactionRetryWorker
 import com.firesms.app.worker.updateFailedRetryNetworkPolicy
@@ -36,6 +37,64 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     val historyRetention: StateFlow<String> = prefs.historyRetention
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), HistoryRetention.NEVER.value)
+
+    val updateSnapshot = app.updateRepository.state
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), UpdateSnapshot())
+
+    sealed interface UpdateCheckState {
+        data object Checking : UpdateCheckState
+        data object UpToDate : UpdateCheckState
+        data class Failure(val message: String) : UpdateCheckState
+    }
+
+    private val _updateCheckState = MutableStateFlow<UpdateCheckState?>(null)
+    val updateCheckState = _updateCheckState.asStateFlow()
+    private val _updatePreferenceError = MutableStateFlow<String?>(null)
+    val updatePreferenceError = _updatePreferenceError.asStateFlow()
+
+    fun checkForUpdates() {
+        if (_updateCheckState.value == UpdateCheckState.Checking) return
+        _updatePreferenceError.value = null
+        _updateCheckState.value = UpdateCheckState.Checking
+        viewModelScope.launch {
+            try {
+                val release = app.updateRepository.checkForUpdates()
+                _updateCheckState.value = if (release == null) UpdateCheckState.UpToDate else null
+            } catch (error: CancellationException) {
+                _updateCheckState.value = null
+                throw error
+            } catch (error: Exception) {
+                _updateCheckState.value = UpdateCheckState.Failure(
+                    error.message ?: "Couldn't check for updates. Try again later."
+                )
+            }
+        }
+    }
+
+    fun ignoreUpdate(version: String) {
+        changeIgnoredUpdate { app.updateRepository.ignoreUpdate(version) }
+    }
+
+    fun clearIgnoredUpdate() {
+        changeIgnoredUpdate { app.updateRepository.clearIgnoredUpdate() }
+    }
+
+    private fun changeIgnoredUpdate(action: suspend () -> Unit) {
+        viewModelScope.launch {
+            _updatePreferenceError.value = null
+            try {
+                action()
+                // Leave an in-flight check's progress alone; otherwise clear stale status/error text.
+                if (_updateCheckState.value != UpdateCheckState.Checking) {
+                    _updateCheckState.value = null
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                _updatePreferenceError.value = "Couldn't save the ignored update preference. Try again."
+            }
+        }
+    }
 
     sealed class TestResult {
         data object Success : TestResult()

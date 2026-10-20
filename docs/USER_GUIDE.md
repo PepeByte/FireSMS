@@ -21,7 +21,7 @@ It is not a bank app and does not connect to your bank directly. It only works w
 1. Open FireSMS.
 2. Complete onboarding.
 3. Grant SMS access when prompted.
-4. Optional: grant notification permission so FireSMS can notify you when a transaction is created.
+4. Optional: grant notification permission so FireSMS can notify you when a transaction is created or an app update is available.
 5. Enter your Firefly III server URL, for example:
 
    ```text
@@ -131,6 +131,30 @@ Backup files are not encrypted by FireSMS. Store them securely.
 ## History retention
 
 FireSMS can automatically delete old local activity. This only affects FireSMS local history. It does not delete Firefly III transactions.
+
+## App updates
+
+FireSMS checks the [GitHub releases](https://github.com/PepeByte/FireSMS/releases) for a newer stable
+version approximately once a day when connected. Pre-releases and drafts are ignored. Android may
+delay checks because of battery or network restrictions.
+
+- Enable notifications to receive an update alert. Each new version is announced once; you can
+  manage the **App updates** notification channel in Android settings.
+- Open **Settings → App updates → Check for updates** to check immediately. This works even without
+  notification permission and shows the last successful check or a connection/rate-limit error.
+- Tap **Ignore this update** in Settings or directly on the update notification (expand it if needed)
+  to hide that version and dismiss its notification. The notification action works offline and may take
+  a moment to finish. The choice survives app restarts and manual checks; newer releases are still
+  offered. Use **Settings → App updates → Stop ignoring this update** to undo it. This device-local
+  preference is not included in backups.
+- When an update is available, tap **View release on GitHub** (or the notification) to review it and
+  download its APK in your browser. Install only the project's official release APK, signed with the
+  same key as your installed app. Android may require permission to install apps from your browser
+  and will ask you to confirm installation.
+
+FireSMS never downloads or installs updates automatically. GitHub update checks are separate from
+the Firefly III transaction-sync network preference and may use Wi-Fi or mobile data. They send no
+financial data or Firefly III credentials; see [Privacy](../PRIVACY.md#update-checks).
 
 ## Troubleshooting
 

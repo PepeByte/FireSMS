@@ -39,6 +39,10 @@
             </intent-filter>
         </receiver>
 
+        <receiver
+            android:name=".service.UpdateActionReceiver"
+            android:exported="false" />
+
         <service
             android:name=".service.SmsProcessingService"
             android:foregroundServiceType="dataSync"

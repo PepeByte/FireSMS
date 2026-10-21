@@ -134,6 +134,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun exportData(uri: Uri) {
+        if (_dataTransferState.value is DataTransferState.Working) return
         viewModelScope.launch {
             _dataTransferState.value = DataTransferState.Working("Exporting backup…")
             try {
@@ -141,6 +142,8 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                 _dataTransferState.value = DataTransferState.Success(
                     "Backup exported (${summary.totalRecords} records)"
                 )
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: Exception) {
                 _dataTransferState.value = DataTransferState.Failure(
                     "Export failed: ${error.message ?: "Unknown error"}"
@@ -150,6 +153,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun importData(uri: Uri) {
+        if (_dataTransferState.value is DataTransferState.Working) return
         viewModelScope.launch {
             _dataTransferState.value = DataTransferState.Working("Restoring backup…")
             try {

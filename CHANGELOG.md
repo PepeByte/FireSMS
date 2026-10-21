@@ -4,6 +4,10 @@ All notable changes to FireSMS will be documented in this file.
 
 ## Unreleased
 
+- Fixed: backups wait for SMS/retry processing to finish before capturing settings and records.
+- Fixed: exported dead-letter retry records with unreadable payloads can be restored without making them runnable.
+- Fixed: restore rolls back database changes if settings cannot be written, and completes an in-progress replacement despite navigation cancellation.
+- Added populated backup round-trip, validation, and restore-failure regression tests.
 - Added daily checks for newer stable GitHub releases, with one notification per version and no automatic downloads or installation.
 - Added **Settings → App updates** with manual checking, cached update availability, last successful check time, and a link to the official release page.
 - Added **Ignore this update** with a persistent per-version skip, notification dismissal, and an undo option; newer releases are still offered.

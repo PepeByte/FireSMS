@@ -1,6 +1,7 @@
 package com.firesms.app.ui.screens
 
 import android.Manifest
+import android.content.ClipData
 import android.content.pm.PackageManager
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -19,9 +20,9 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -41,6 +42,7 @@ import com.firesms.app.data.local.StoredTransactionSnapshot
 import com.firesms.app.data.local.StoredTransactionSplit
 import com.firesms.app.ui.viewmodels.HomeTransactionItem
 import com.firesms.app.ui.viewmodels.HomeViewModel
+import kotlinx.coroutines.launch
 import java.math.BigDecimal
 import java.time.Instant
 import java.time.LocalDate
@@ -495,7 +497,8 @@ private fun SmsLogDetailDialog(
 ) {
     val log = item.log
     val transaction = item.transaction
-    val clipboardManager = LocalClipboardManager.current
+    val clipboard = LocalClipboard.current
+    val coroutineScope = rememberCoroutineScope()
     val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
     val color = statusColor(log.status, MaterialTheme.colorScheme)
     val label = statusLabel(log.status)
@@ -596,7 +599,11 @@ private fun SmsLogDetailDialog(
                         )
                         Spacer(Modifier.width(8.dp))
                         TextButton(
-                            onClick = { clipboardManager.setText(AnnotatedString(log.body)) },
+                            onClick = {
+                                coroutineScope.launch {
+                                    clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("SMS", log.body)))
+                                }
+                            },
                             contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
                         ) {
                             Text("Copy", style = MaterialTheme.typography.labelSmall)
@@ -614,7 +621,11 @@ private fun SmsLogDetailDialog(
                             )
                             Spacer(Modifier.width(8.dp))
                             TextButton(
-                                onClick = { clipboardManager.setText(AnnotatedString(log.errorMessage)) },
+                                onClick = {
+                                    coroutineScope.launch {
+                                        clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Error", log.errorMessage)))
+                                    }
+                                },
                                 contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
                             ) {
                                 Text("Copy", style = MaterialTheme.typography.labelSmall)

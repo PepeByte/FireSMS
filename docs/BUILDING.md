@@ -7,10 +7,13 @@ This guide covers local Android development and CI checks for FireSMS.
 - JDK 17.
 - Android SDK with API 35 installed.
 - Android SDK Build Tools installed.
+- Android NDK 27.0.12077973 (for stripping native libraries bundled by dependencies).
 - Android Studio, or command-line Android SDK tools.
 - Git.
 
-The project uses the Gradle wrapper, so you do not need to install Gradle globally.
+The project uses the Gradle 8.14.4 wrapper with Android Gradle Plugin 8.13.2, so you do not need to install Gradle globally. Keep the wrapper on a compatible Gradle 8.x release; AGP 8.x uses dependency APIs deprecated in Gradle 9.
+
+`gradle/gradle-daemon-jvm.properties` selects JDK 17 for the build daemon, even if your shell defaults to a newer Java version. Install JDK 17 and set `JAVA_HOME` to it if Gradle cannot discover it automatically.
 
 ## Clone the project
 
@@ -41,6 +44,12 @@ sdk.dir=/absolute/path/to/Android/Sdk
 ```
 
 `local.properties` is ignored by Git and should not be committed.
+
+Install the required SDK packages (or select the same versions in Android Studio's SDK Manager):
+
+```bash
+sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.0.12077973"
+```
 
 ## Build commands
 
@@ -145,6 +154,17 @@ Adding the workflow does not retroactively release earlier commits. Re-running a
 ### `SDK location not found`
 
 Set `ANDROID_HOME` or create `local.properties` with `sdk.dir=/path/to/android/sdk`.
+
+### `Unable to strip the following libraries`
+
+Install the pinned NDK into the same SDK configured above:
+
+```bash
+sdkmanager "ndk;27.0.12077973"
+./gradlew clean assembleDebug
+```
+
+The NDK supplies `llvm-strip` for native libraries included by Compose and DataStore. Without it, Gradle packages those libraries unstripped; no blanket warning suppression or symbol-retention workaround is needed.
 
 ### Java version errors
 

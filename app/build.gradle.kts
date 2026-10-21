@@ -9,6 +9,7 @@ plugins {
 android {
     namespace = "com.firesms.app"
     compileSdk = 35
+    ndkVersion = "27.0.12077973"
 
     defaultConfig {
         applicationId = "com.firesms.app"

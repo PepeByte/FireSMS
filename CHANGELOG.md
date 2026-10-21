@@ -4,6 +4,8 @@ All notable changes to FireSMS will be documented in this file.
 
 ## Unreleased
 
+## 1.0.3 — 2026-10-21
+
 - Fixed: backups wait for SMS/retry processing to finish before capturing settings and records.
 - Fixed: exported dead-letter retry records with unreadable payloads can be restored without making them runnable.
 - Fixed: restore rolls back database changes if settings cannot be written, and completes an in-progress replacement despite navigation cancellation.

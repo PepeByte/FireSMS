@@ -86,7 +86,7 @@ class SmsTransactionProcessor(private val context: Context) {
 
         val api = FireflyApi(token)
         return try {
-            val fireflyId = api.createTransactionRaw(baseUrl, createRequest)
+            val fireflyId = api.createTransactionIfMissing(baseUrl, createRequest)
             smsLogDao.updateStatus(
                 log.id, "success",
                 processedAt = System.currentTimeMillis(),

@@ -54,7 +54,7 @@ class RetryWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
                         smsLogDao.initializeTransactionSnapshot(tx.smsLogId, payload.toStoredSnapshot().encode())
                     }
 
-                    val result = api.createTransactionRaw(baseUrl, payload)
+                    val result = api.createTransactionIfMissing(baseUrl, payload)
                     pendingDao.delete(tx)
                     smsLogDao.updateStatus(
                         tx.smsLogId, "success",

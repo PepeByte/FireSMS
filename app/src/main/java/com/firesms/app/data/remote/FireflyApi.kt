@@ -112,7 +112,14 @@ data class FireflyTransactionSplit(
     @SerialName("category_name") val categoryName: String? = null,
     @SerialName("budget_name") val budgetName: String? = null,
     val notes: String? = null,
+    @SerialName("external_id") val externalId: String? = null,
     val order: Int = 0
+)
+
+@Serializable
+data class FireflyTransactionListResponse(
+    val data: List<FireflyTransactionData>,
+    val meta: ListMeta? = null
 )
 
 // Update request — same shape as TransactionRequest but with split fields
@@ -288,6 +295,70 @@ class FireflyApi(private val token: String) {
         }
     }
 
+    /**
+     * Creates the transaction unless Firefly already holds it, in which case the existing
+     * transaction's id is returned instead. A POST that times out after Firefly has stored the
+     * transaction is reported as [FireflyUnavailable] and queued for retry, so without this check
+     * every retry (and every manual "retry failed") created another copy.
+     *
+     * A failed lookup never blocks the create: a network failure would fail the POST as well, and
+     * any other lookup problem simply falls back to the old behaviour.
+     */
+    suspend fun createTransactionIfMissing(
+        baseUrl: String,
+        payload: TransactionRequest
+    ): String {
+        val existing = try {
+            findExistingTransaction(baseUrl, payload)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: FireflyUnavailable) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+        return existing ?: createTransactionRaw(baseUrl, payload)
+    }
+
+    /** Returns the id of a Firefly transaction that matches [payload], or null when none does. */
+    suspend fun findExistingTransaction(baseUrl: String, payload: TransactionRequest): String? {
+        val body = payload.transactions.firstOrNull() ?: return null
+        val day = body.date.take(10)
+        if (!DAY_PATTERN.matches(day)) return null
+        return try {
+            findDuplicateTransaction(body, listTransactions(baseUrl, day, day))?.id
+        } catch (e: FireflyUnavailable) {
+            throw e
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: java.io.IOException) {
+            throw FireflyUnavailable(0, networkErrorMessage(e))
+        }
+    }
+
+    /** Lists every transaction group dated between [start] and [end] (inclusive, yyyy-MM-dd). */
+    suspend fun listTransactions(
+        baseUrl: String,
+        start: String,
+        end: String
+    ): List<FireflyTransactionData> {
+        val groups = mutableListOf<FireflyTransactionData>()
+        var page = 1
+        var totalPages: Int
+        do {
+            val url = apiUrl(baseUrl, "transactions?start=$start&end=$end&limit=100&page=$page")
+            val response = client.get(url) { authorize() }
+            if (!response.status.isSuccess()) {
+                throw FireflyUnavailable(response.status.value, response.bodyAsText().abbreviate())
+            }
+            val result = response.body<FireflyTransactionListResponse>()
+            groups += result.data
+            totalPages = result.meta?.pagination?.totalPages ?: 1
+            page++
+        } while (page <= totalPages && page <= MAX_TRANSACTION_PAGES && result.data.isNotEmpty())
+        return groups
+    }
+
     suspend fun getTransaction(baseUrl: String, transactionId: String): FireflyTransactionResponse {
         val url = apiUrl(baseUrl, "transactions/$transactionId")
         val response = client.get(url) { authorize() }
@@ -376,6 +447,11 @@ class FireflyApi(private val token: String) {
         /** Safety cap on pagination: 100 pages of Firefly's default 50 accounts. */
         const val MAX_ACCOUNT_PAGES = 100
 
+        /** Safety cap on the duplicate lookup: 1000 transactions on a single day. */
+        const val MAX_TRANSACTION_PAGES = 10
+
+        val DAY_PATTERN = Regex("""\d{4}-\d{2}-\d{2}""")
+
         val fireflyJson = Json {
             ignoreUnknownKeys = true
             isLenient = true
@@ -415,6 +491,45 @@ internal fun apiUrl(baseUrl: String, path: String): String {
     if (base.endsWith("/api/v1", ignoreCase = true)) base = base.dropLast(7)
     else if (base.endsWith("/api", ignoreCase = true)) base = base.dropLast(4)
     return "$base/api/v1/${path.trimStart('/')}"
+}
+
+/**
+ * Finds the transaction group in [candidates] that already holds [body].
+ *
+ * A split with the same external id (the SMS hash) is always a match. Otherwise a split matches
+ * when its type, amount and date-time (to the second) all equal the request's. Dates are compared
+ * as wall-clock time: FireSMS sends a local time without an offset, Firefly reads it in its own
+ * time zone and returns it in that same zone, so the wall-clock part round-trips unchanged even
+ * when the phone and the server are in different zones.
+ */
+internal fun findDuplicateTransaction(
+    body: TransactionBody,
+    candidates: List<FireflyTransactionData>
+): FireflyTransactionData? {
+    candidates.firstOrNull { group ->
+        group.attributes.transactions.any { it.externalId == body.externalId }
+    }?.let { return it }
+
+    val wantedTime = parseWallClock(body.date) ?: return null
+    val wantedAmount = parseAmount(body.amount) ?: return null
+    return candidates.firstOrNull { group ->
+        group.attributes.transactions.any { split ->
+            split.type.equals(body.type, ignoreCase = true) &&
+                parseAmount(split.amount)?.compareTo(wantedAmount) == 0 &&
+                parseWallClock(split.date) == wantedTime
+        }
+    }
+}
+
+private fun parseAmount(value: String): java.math.BigDecimal? =
+    value.replace(",", "").trim().toBigDecimalOrNull()?.abs()
+
+/** Parses "yyyy-MM-dd HH:mm:ss" or an ISO-8601 date-time (with or without offset). */
+private fun parseWallClock(value: String): java.time.LocalDateTime? {
+    val text = value.trim().replace(' ', 'T')
+    val parsed = runCatching { java.time.OffsetDateTime.parse(text).toLocalDateTime() }.getOrNull()
+        ?: runCatching { java.time.LocalDateTime.parse(text) }.getOrNull()
+    return parsed?.withNano(0)
 }
 
 /** Keeps Firefly's HTML error pages from filling the activity log. */

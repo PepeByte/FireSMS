@@ -4,6 +4,11 @@ All notable changes to FireSMS will be documented in this file.
 
 ## Unreleased
 
+## 1.0.4 — 2026-11-08
+
+- Fixed: SMS processing and retries check for matching transactions already in Firefly III and reuse them instead of creating duplicates, including after a request times out following a successful import.
+- Added duplicate-transaction matching regression tests.
+
 ## 1.0.3 — 2026-10-21
 
 - Fixed: backups wait for SMS/retry processing to finish before capturing settings and records.

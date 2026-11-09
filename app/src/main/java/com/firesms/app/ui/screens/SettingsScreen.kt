@@ -215,11 +215,11 @@ fun SettingsScreen(
 
             FireSmsSection(
                 title = "Sync preference",
-                subtitle = "When to sync queued transactions"
+                subtitle = "Which networks FireSMS may use to send transactions to Firefly"
             ) {
                 FireSmsPreferenceOption(
                     title = "Wi-Fi or mobile data",
-                    description = "Sync whenever the device has an internet connection.",
+                    description = "Send transactions as soon as they arrive, on any connection.",
                     selected = syncNetworkPolicy == "any_network",
                     onClick = {
                         if (syncNetworkPolicy != "any_network") {
@@ -230,7 +230,7 @@ fun SettingsScreen(
                 )
                 FireSmsPreferenceOption(
                     title = "Wi-Fi only",
-                    description = "Wait for Wi-Fi before retrying queued transactions.",
+                    description = "Never use mobile data. Transactions received off Wi-Fi wait and sync when Wi-Fi is back.",
                     selected = syncNetworkPolicy == "wifi_only",
                     onClick = {
                         if (syncNetworkPolicy != "wifi_only") {

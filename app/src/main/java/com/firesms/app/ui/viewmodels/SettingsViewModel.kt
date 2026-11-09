@@ -129,8 +129,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun saveSyncNetworkPolicy(value: String) {
         viewModelScope.launch {
             prefs.setSyncNetworkPolicy(value)
-            // Re-schedule retries with new network constraint
-            com.firesms.app.worker.scheduleRetry(getApplication())
+            // Re-schedule with the new network constraint. No delay: items held for Wi-Fi are already
+            // due, and the worker only sends retries whose own retry time has come.
+            com.firesms.app.worker.scheduleRetry(getApplication(), delayMillis = 0)
             updateFailedRetryNetworkPolicy(getApplication())
         }
     }

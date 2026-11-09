@@ -1,6 +1,8 @@
 package com.firesms.app.service
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import com.firesms.app.data.local.AppDatabase
 import com.firesms.app.data.local.PreferencesManager
 import com.firesms.app.data.local.StoredTransactionSnapshot
@@ -126,6 +128,13 @@ class SmsTransactionProcessor(private val context: Context) {
             return Outcome.NotConfigured
         }
 
+        // "Wi-Fi only" applies to the first send too, not just retries: hold the transaction until
+        // the retry worker's unmetered-network constraint is met.
+        if (prefs.syncNetworkPolicy.first() == "wifi_only" && !isOnUnmeteredNetwork(context)) {
+            queue(log.id, createRequest, WAITING_FOR_WIFI, delayMillis = 0)
+            return Outcome.Queued(WAITING_FOR_WIFI, parsed.description)
+        }
+
         val api = FireflyApi(token)
         return try {
             val fireflyId = api.createTransactionIfMissing(baseUrl, createRequest)
@@ -142,24 +151,28 @@ class SmsTransactionProcessor(private val context: Context) {
             Outcome.Failed(e.message)
         } catch (e: FireflyUnavailable) {
             // 5xx or network: queue for automatic retry.
-            smsLogDao.updateStatus(
-                log.id, SmsStatus.QUEUED,
-                processedAt = System.currentTimeMillis(),
-                errorMessage = e.message
-            )
-            pendingDao.deleteBySmsLogId(log.id)
-            pendingDao.insert(
-                PendingTransaction(
-                    smsLogId = log.id,
-                    fireflyPayload = Json.encodeToString(TransactionRequest.serializer(), createRequest),
-                    nextRetryAt = System.currentTimeMillis() + 120_000
-                )
-            )
-            scheduleRetry(context)
+            queue(log.id, createRequest, e.message, delayMillis = 120_000)
             Outcome.Queued(e.message, parsed.description)
         } finally {
             api.close()
         }
+    }
+
+    private suspend fun queue(logId: Long, createRequest: TransactionRequest, reason: String?, delayMillis: Long) {
+        smsLogDao.updateStatus(
+            logId, SmsStatus.QUEUED,
+            processedAt = System.currentTimeMillis(),
+            errorMessage = reason
+        )
+        pendingDao.deleteBySmsLogId(logId)
+        pendingDao.insert(
+            PendingTransaction(
+                smsLogId = logId,
+                fireflyPayload = Json.encodeToString(TransactionRequest.serializer(), createRequest),
+                nextRetryAt = System.currentTimeMillis() + delayMillis
+            )
+        )
+        scheduleRetry(context, delayMillis)
     }
 
     private suspend fun applyTitleMapping(transaction: ParsedTransaction): ParsedTransaction {
@@ -193,3 +206,13 @@ class SmsTransactionProcessor(private val context: Context) {
 internal fun StoredTransactionSnapshot.displayDescription(): String? =
     groupTitle?.takeIf { it.isNotBlank() }
         ?: transactions.firstOrNull()?.description?.takeIf { it.isNotBlank() }
+
+internal const val WAITING_FOR_WIFI = "Waiting for Wi-Fi (sync preference is Wi-Fi only)"
+
+/** True on Wi-Fi or another unmetered network; the same test WorkManager's UNMETERED constraint uses. */
+internal fun isOnUnmeteredNetwork(context: Context): Boolean {
+    val connectivity = context.getSystemService(ConnectivityManager::class.java) ?: return false
+    val capabilities = connectivity.getNetworkCapabilities(connectivity.activeNetwork) ?: return false
+    return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+        capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+}

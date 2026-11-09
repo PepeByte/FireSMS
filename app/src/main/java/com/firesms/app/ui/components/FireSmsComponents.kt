@@ -1,19 +1,33 @@
 package com.firesms.app.ui.components
 
-import androidx.compose.foundation.clickable
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
+import androidx.compose.material.icons.automirrored.outlined.ReceiptLong
+import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.outlined.AutoFixHigh
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.semantics.Role
+import com.firesms.app.ui.theme.FireSmsTheme
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
@@ -34,11 +48,14 @@ fun FireSmsScaffold(
     snackbarHost: @Composable () -> Unit = {},
     content: @Composable (PaddingValues) -> Unit
 ) {
+    // The bar tints itself once content scrolls underneath it.
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     Scaffold(
-        modifier = modifier,
+        modifier = modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
+                scrollBehavior = scrollBehavior,
                 title = { Text(title) },
                 navigationIcon = {
                     if (onBack != null) {
@@ -52,7 +69,8 @@ fun FireSmsScaffold(
                 },
                 actions = actions,
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background
+                    containerColor = MaterialTheme.colorScheme.background,
+                    scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer
                 )
             )
         },
@@ -84,15 +102,21 @@ fun FireSmsBottomBar(
                 FireSmsTopLevelDestination.AUTOMATION -> onAutomation
                 FireSmsTopLevelDestination.SETTINGS -> onSettings
             }
-            val icon = when (destination) {
-                FireSmsTopLevelDestination.ACTIVITY -> Icons.Default.Home
-                FireSmsTopLevelDestination.AUTOMATION -> Icons.Default.Build
-                FireSmsTopLevelDestination.SETTINGS -> Icons.Default.Settings
+            val isSelected = selected == destination
+            val icon: ImageVector = when (destination) {
+                FireSmsTopLevelDestination.ACTIVITY ->
+                    if (isSelected) Icons.AutoMirrored.Filled.ReceiptLong else Icons.AutoMirrored.Outlined.ReceiptLong
+                FireSmsTopLevelDestination.AUTOMATION ->
+                    if (isSelected) Icons.Filled.AutoFixHigh else Icons.Outlined.AutoFixHigh
+                FireSmsTopLevelDestination.SETTINGS ->
+                    if (isSelected) Icons.Filled.Settings else Icons.Outlined.Settings
             }
             NavigationBarItem(
-                selected = selected == destination,
+                selected = isSelected,
                 onClick = onClick,
+                // The visible label already names the destination.
                 icon = { Icon(icon, contentDescription = null) },
+                alwaysShowLabel = true,
                 label = { Text(destination.label) }
             )
         }
@@ -114,9 +138,9 @@ fun FireSmsScreen(
                 .widthIn(max = 760.dp)
                 .fillMaxSize()
                 .align(Alignment.TopCenter)
-                .padding(contentPadding)
+                .imePadding()
                 .verticalScroll(rememberScrollState())
-                .imePadding(),
+                .padding(contentPadding),
             verticalArrangement = verticalArrangement,
             content = content
         )
@@ -166,6 +190,7 @@ fun FireSmsEmptyState(
     title: String,
     message: String,
     modifier: Modifier = Modifier,
+    icon: ImageVector? = null,
     action: (@Composable () -> Unit)? = null
 ) {
     Column(
@@ -175,6 +200,20 @@ fun FireSmsEmptyState(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        if (icon != null) {
+            Surface(
+                shape = RoundedCornerShape(50),
+                color = MaterialTheme.colorScheme.primaryContainer
+            ) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.padding(16.dp).size(32.dp)
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+        }
         Text(
             text = title,
             style = MaterialTheme.typography.titleMedium,
@@ -205,7 +244,7 @@ fun FireSmsStatusPill(
     Surface(
         modifier = modifier,
         color = color.copy(alpha = 0.15f),
-        shape = MaterialTheme.shapes.small
+        shape = RoundedCornerShape(50)
     ) {
         Text(
             text = label,
@@ -261,13 +300,13 @@ fun FireSmsPreferenceOption(
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
+            .selectable(selected = selected, onClick = onClick, role = Role.RadioButton),
         shape = MaterialTheme.shapes.medium,
         colors = CardDefaults.cardColors(
             containerColor = if (selected)
                 MaterialTheme.colorScheme.primaryContainer
             else
-                MaterialTheme.colorScheme.surfaceVariant
+                MaterialTheme.colorScheme.surfaceContainerLow
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
@@ -288,7 +327,8 @@ fun FireSmsPreferenceOption(
                 )
             }
             Spacer(Modifier.width(12.dp))
-            RadioButton(selected = selected, onClick = onClick)
+            // The whole row is the radio target, so the button itself is not separately focusable.
+            RadioButton(selected = selected, onClick = null)
         }
     }
 }
@@ -301,29 +341,61 @@ fun FireSmsConfirmDialog(
     message: String,
     confirmText: String,
     onConfirm: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    destructive: Boolean = true,
+    dismissText: String = "Cancel"
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = { Text(message) },
         confirmButton = {
-            Button(
-                onClick = onConfirm,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.error,
-                    contentColor = MaterialTheme.colorScheme.onError
-                )
-            ) {
-                Text(confirmText)
+            if (destructive) {
+                Button(
+                    onClick = onConfirm,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError
+                    )
+                ) {
+                    Text(confirmText)
+                }
+            } else {
+                TextButton(onClick = onConfirm) { Text(confirmText) }
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel")
+                Text(dismissText)
             }
         }
     )
+}
+
+// ─── Unsaved changes guard ─────────────────────────────────────
+
+/**
+ * Intercepts system back and the toolbar back arrow while [isDirty], asking before edits are thrown away.
+ * Use the returned lambda as the screen's `onBack`.
+ */
+@Composable
+fun rememberUnsavedChangesGuard(isDirty: Boolean, onBack: () -> Unit): () -> Unit {
+    var showDialog by remember { mutableStateOf(false) }
+    BackHandler(enabled = isDirty) { showDialog = true }
+    if (showDialog) {
+        FireSmsConfirmDialog(
+            title = "Discard changes?",
+            message = "Your unsaved changes will be lost.",
+            confirmText = "Discard",
+            dismissText = "Keep editing",
+            onConfirm = {
+                showDialog = false
+                onBack()
+            },
+            onDismiss = { showDialog = false }
+        )
+    }
+    return { if (isDirty) showDialog = true else onBack() }
 }
 
 // ─── List card ─────────────────────────────────────────────────
@@ -337,25 +409,13 @@ fun FireSmsListCard(
     trailing: (@Composable RowScope.() -> Unit)? = null,
     actions: (@Composable RowScope.() -> Unit)? = null
 ) {
-    val cardModifier = if (onClick != null) {
-        modifier.fillMaxWidth().clickable(onClick = onClick)
-    } else {
-        modifier.fillMaxWidth()
-    }
-    Card(
-        modifier = cardModifier,
-        shape = MaterialTheme.shapes.medium,
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-    ) {
+    val content: @Composable ColumnScope.() -> Unit = {
         Column(modifier = Modifier.padding(12.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(modifier = Modifier.weight(1f), content = headline)
+                Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, content = headline)
                 if (trailing != null) {
                     trailing()
                 }
@@ -372,22 +432,53 @@ fun FireSmsListCard(
             }
         }
     }
+    // Card(onClick) clips the ripple to the rounded shape; a .clickable modifier would not.
+    if (onClick != null) {
+        Card(
+            onClick = onClick,
+            modifier = modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.medium,
+            colors = fireSmsCardColors(),
+            border = fireSmsCardBorder(),
+            content = content
+        )
+    } else {
+        Card(
+            modifier = modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.medium,
+            colors = fireSmsCardColors(),
+            border = fireSmsCardBorder(),
+            content = content
+        )
+    }
 }
+
+/** The one card style used for list items and form groups across the app. */
+@Composable
+fun fireSmsCardColors(): CardColors = CardDefaults.cardColors(
+    containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+    contentColor = MaterialTheme.colorScheme.onSurface
+)
+
+@Composable
+fun fireSmsCardBorder(): BorderStroke = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
 
 // ─── Status helpers ────────────────────────────────────────────
 
 fun statusLabel(status: String): String = when (status) {
     "success" -> "Synced"
     "failed" -> "Failed"
+    "queued" -> "Waiting to sync"
     "unparsed" -> "Needs rule"
     "pending" -> "Processing"
     else -> "Unknown"
 }
 
-fun statusColor(status: String, colorScheme: ColorScheme): Color = when (status) {
-    "success" -> colorScheme.primary
-    "failed" -> colorScheme.error
-    "pending" -> colorScheme.secondary
-    "unparsed" -> colorScheme.tertiary
-    else -> colorScheme.onSurfaceVariant
+@Composable
+fun statusColor(status: String): Color = when (status) {
+    "success" -> FireSmsTheme.colors.success
+    "failed" -> MaterialTheme.colorScheme.error
+    "queued", "unparsed" -> FireSmsTheme.colors.warning
+    "pending" -> MaterialTheme.colorScheme.secondary
+    else -> MaterialTheme.colorScheme.onSurfaceVariant
 }

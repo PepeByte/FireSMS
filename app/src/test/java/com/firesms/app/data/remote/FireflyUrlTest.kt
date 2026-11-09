@@ -2,6 +2,8 @@ package com.firesms.app.data.remote
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class FireflyUrlTest {
@@ -71,11 +73,131 @@ class FireflyUrlTest {
     }
 
     @Test
-    fun `assumes http when the scheme is missing`() {
+    fun `assumes https when the scheme is missing`() {
         assertEquals(
-            "http://192.168.1.10:8080/api/v1/about",
+            "https://192.168.1.10:8080/api/v1/about",
             apiUrl("192.168.1.10:8080", "about")
         )
+    }
+
+    @Test
+    fun `keeps an explicit http scheme`() {
+        assertEquals(
+            "http://192.168.1.10:8080/api/v1/about",
+            apiUrl("http://192.168.1.10:8080", "about")
+        )
+    }
+}
+
+class NormalizeFireflyUrlTest {
+
+    @Test
+    fun `adds https to an address without a scheme`() {
+        assertEquals("https://firefly.example.com", normalizeFireflyUrl("firefly.example.com"))
+    }
+
+    @Test
+    fun `keeps an explicit scheme in any case`() {
+        assertEquals("http://10.0.0.2:8080", normalizeFireflyUrl("http://10.0.0.2:8080"))
+        assertEquals("HTTPS://firefly.example.com", normalizeFireflyUrl("HTTPS://firefly.example.com"))
+    }
+
+    @Test
+    fun `trims whitespace and trailing slashes`() {
+        assertEquals("https://example.com/firefly", normalizeFireflyUrl("  example.com/firefly//\n"))
+    }
+
+    @Test
+    fun `leaves a blank address blank`() {
+        assertEquals("", normalizeFireflyUrl("   "))
+    }
+
+    @Test
+    fun `flags only explicit http as cleartext`() {
+        assertTrue(isCleartextUrl("http://192.168.1.10"))
+        assertTrue(isCleartextUrl(" HTTP://nas.local "))
+        assertFalse(isCleartextUrl("https://firefly.example.com"))
+        assertFalse(isCleartextUrl("firefly.example.com"))
+        assertFalse(isCleartextUrl(""))
+    }
+}
+
+class ConnectionCheckClassificationTest {
+
+    private fun failure(result: ConnectionCheckResult): String =
+        assertIs<ConnectionCheckResult.Failure>(result).message
+
+    @Test
+    fun `json from the api is a success`() {
+        assertEquals(
+            ConnectionCheckResult.Success,
+            classifyConnectionResponse(200, "application/vnd.api+json", "/api/v1/about")
+        )
+        assertEquals(
+            ConnectionCheckResult.Success,
+            classifyConnectionResponse(200, "application/json; charset=utf-8", "/firefly/api/v1/about")
+        )
+    }
+
+    @Test
+    fun `rejected token`() {
+        assertTrue(failure(classifyConnectionResponse(401, "application/json", "/api/v1/about"))
+            .startsWith("Access token was rejected"))
+        assertTrue(failure(classifyConnectionResponse(403, "text/html", "/api/v1/about"))
+            .startsWith("Access token was rejected"))
+    }
+
+    @Test
+    fun `missing api`() {
+        assertEquals(MESSAGE_API_NOT_FOUND, failure(classifyConnectionResponse(404, "text/html", "/api/v1/about")))
+    }
+
+    @Test
+    fun `html page instead of the api`() {
+        assertEquals(MESSAGE_WEB_PAGE, failure(classifyConnectionResponse(200, "text/html; charset=UTF-8", "/login")))
+        assertEquals(MESSAGE_WEB_PAGE, failure(classifyConnectionResponse(200, "text/html", "/api/v1/about")))
+        assertEquals(MESSAGE_WEB_PAGE, failure(classifyConnectionResponse(200, "application/json", "/login")))
+    }
+
+    @Test
+    fun `server error`() {
+        assertTrue(failure(classifyConnectionResponse(502, "application/json", "/api/v1/about")).contains("HTTP 502"))
+    }
+
+    @Test
+    fun `timeouts and unreachable servers`() {
+        assertEquals(MESSAGE_TIMEOUT, failure(classifyConnectionError(java.net.SocketTimeoutException("timeout"))))
+        assertEquals(MESSAGE_UNREACHABLE, failure(classifyConnectionError(java.net.UnknownHostException("x"))))
+        assertEquals(
+            MESSAGE_UNREACHABLE,
+            failure(classifyConnectionError(java.io.IOException("wrapped", java.net.ConnectException("refused"))))
+        )
+        assertTrue(failure(classifyConnectionError(java.net.UnknownHostException("x"))).startsWith("Couldn't reach the server"))
+    }
+
+    @Test
+    fun `certificate problems`() {
+        assertEquals(
+            MESSAGE_CERTIFICATE,
+            failure(classifyConnectionError(javax.net.ssl.SSLHandshakeException("PKIX path building failed")))
+        )
+        assertEquals(
+            MESSAGE_CERTIFICATE,
+            failure(classifyConnectionError(java.security.cert.CertificateExpiredException("expired")))
+        )
+    }
+
+    @Test
+    fun `https spoken to a plain http server`() {
+        assertEquals(
+            MESSAGE_NOT_HTTPS,
+            failure(classifyConnectionError(javax.net.ssl.SSLException("Unrecognized SSL message, plaintext connection?")))
+        )
+    }
+
+    @Test
+    fun `other errors fall back to the network message`() {
+        assertEquals("something odd", failure(classifyConnectionError(IllegalStateException("something odd"))))
     }
 }
 

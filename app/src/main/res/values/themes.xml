@@ -1,8 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.FireSMS" parent="android:style/Theme.Material.NoActionBar">
+    <!-- Light by default; values-night overrides for dark mode so launch matches the system theme. -->
+    <style name="Theme.FireSMS" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/firesms_background</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
-        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+
+    <style name="Theme.FireSMS.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/firesms_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.FireSMS</item>
     </style>
 </resources>

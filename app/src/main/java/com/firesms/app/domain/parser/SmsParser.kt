@@ -4,6 +4,7 @@ import com.firesms.app.data.local.ParserRuleDao
 import com.firesms.app.data.local.entity.ParserRule
 import com.firesms.app.domain.model.ParsedTransaction
 import com.firesms.app.domain.rules.RuleAccounts
+import com.firesms.app.domain.rules.RuleValidator
 import com.firesms.app.domain.rules.withLegacyDepositAccountResolved
 import kotlinx.coroutines.flow.first
 import java.math.BigDecimal
@@ -15,6 +16,50 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatterBuilder
 import java.time.temporal.TemporalQuery
 import java.util.Locale
+
+/** How a matched rule found the transaction date. */
+sealed interface DateResolution {
+    val millis: Long
+
+    /** The rule has no date pattern and format, so the SMS received time is used. */
+    data class NotConfigured(override val millis: Long) : DateResolution
+
+    /** [text] from the message was parsed with the rule's date format. */
+    data class Parsed(override val millis: Long, val text: String) : DateResolution
+
+    /** The date could not be read, so the SMS received time is used instead. */
+    data class Fallback(override val millis: Long, val reason: String) : DateResolution
+}
+
+/** The outcome of testing one rule against one SMS, with the reason when it does not match. */
+sealed interface RuleDiagnosis {
+    /** [field] does not compile; [detail] is the regex engine's message. */
+    data class InvalidPattern(val field: String, val detail: String) : RuleDiagnosis
+
+    /** The sender pattern did not match [sender]. */
+    data class SenderMismatch(val sender: String) : RuleDiagnosis
+
+    /** The body pattern found nothing in the message. */
+    data object BodyMismatch : RuleDiagnosis
+
+    /**
+     * The body matched, but the amount [template] resolved to [resolved], which is not a
+     * positive number. [missingGroups] are placeholders the match did not fill.
+     */
+    data class AmountInvalid(
+        val template: String,
+        val resolved: String,
+        val missingGroups: List<String>,
+        val groups: List<Pair<String, String?>>
+    ) : RuleDiagnosis
+
+    /** The rule matched. [groups] lists every named group in body-pattern order. */
+    data class Matched(
+        val transaction: ParsedTransaction,
+        val groups: List<Pair<String, String?>>,
+        val date: DateResolution
+    ) : RuleDiagnosis
+}
 
 class SmsParser(private val ruleDao: ParserRuleDao) {
 
@@ -113,13 +158,67 @@ class SmsParser(private val ruleDao: ParserRuleDao) {
             body: String,
             rule: ParserRule,
             receivedAt: Long
-        ): Long {
-            val pattern = rule.datePattern?.takeIf { it.isNotBlank() } ?: return receivedAt
-            val format = rule.dateFormat?.takeIf { it.isNotBlank() } ?: return receivedAt
+        ): Long = resolveDate(groups, body, rule, receivedAt).millis
+
+        private fun resolveDate(
+            groups: MatchGroupCollection,
+            body: String,
+            rule: ParserRule,
+            receivedAt: Long
+        ): DateResolution {
+            val pattern = rule.datePattern?.takeIf { it.isNotBlank() }
+            val format = rule.dateFormat?.takeIf { it.isNotBlank() }
+            if (pattern == null || format == null) return DateResolution.NotConfigured(receivedAt)
             val dateText = placeholderName(pattern)
                 ?.let { groups.value(it) }
                 ?: if (pattern.startsWith("{{")) null else compile(pattern)?.find(body)?.value
-            return dateText?.let { parseDate(it.trim(), format, receivedAt) } ?: receivedAt
+            if (dateText == null) {
+                return DateResolution.Fallback(receivedAt, "the date pattern '$pattern' found no date in the message")
+            }
+            val text = dateText.trim()
+            return parseDate(text, format, receivedAt)
+                ?.let { DateResolution.Parsed(it, text) }
+                ?: DateResolution.Fallback(receivedAt, "'$text' doesn't match the date format '$format'")
+        }
+
+        /**
+         * Applies [rule] like [applyRule], but explains the outcome: which step failed, or every
+         * named group and how the date was found. For the rule editor; [applyRule] stays the
+         * fast path for incoming SMS.
+         */
+        fun diagnoseRule(rule: ParserRule, sender: String, body: String, receivedAt: Long): RuleDiagnosis {
+            val senderRegex = try {
+                Regex(rule.senderPattern)
+            } catch (e: IllegalArgumentException) {
+                return RuleDiagnosis.InvalidPattern("Sender pattern", e.message.orEmpty())
+            }
+            if (!senderRegex.containsMatchIn(sender)) return RuleDiagnosis.SenderMismatch(sender)
+            val bodyRegex = try {
+                Regex(rule.bodyPattern, RegexOption.DOT_MATCHES_ALL)
+            } catch (e: IllegalArgumentException) {
+                return RuleDiagnosis.InvalidPattern("Body pattern", e.message.orEmpty())
+            }
+            val groups = bodyRegex.find(body)?.groups ?: return RuleDiagnosis.BodyMismatch
+            val groupValues = RuleValidator.namedGroups(rule.bodyPattern).map { it to groups.value(it) }
+
+            val missing = PLACEHOLDER.findAll(rule.amountTemplate)
+                .map { it.groupValues[1] }
+                .filter { groups.value(it) == null }
+                .distinct()
+                .toList()
+            val filledAmount = fillTemplate(rule.amountTemplate, groups)
+            if (missing.isNotEmpty() || normalizeAmount(filledAmount) == null) {
+                return RuleDiagnosis.AmountInvalid(rule.amountTemplate, filledAmount, missing, groupValues)
+            }
+
+            // Every step above passed, so applyRule matches too.
+            val transaction = applyRule(rule, sender, body, receivedAt)
+                ?: return RuleDiagnosis.BodyMismatch
+            return RuleDiagnosis.Matched(
+                transaction = transaction,
+                groups = groupValues,
+                date = resolveDate(groups, body, rule, receivedAt)
+            )
         }
 
         /**

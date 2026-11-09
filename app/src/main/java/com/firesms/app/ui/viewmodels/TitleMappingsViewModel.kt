@@ -6,8 +6,20 @@ import androidx.lifecycle.viewModelScope
 import com.firesms.app.FireSmsApp
 import com.firesms.app.data.local.entity.TitleMappingRule
 import com.firesms.app.data.remote.FireflyApi
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+
+/** Category and budget names from Firefly, offered while editing a mapping. */
+data class MappingSuggestions(
+    val categories: List<String> = emptyList(),
+    val budgets: List<String> = emptyList(),
+    val loading: Boolean = false,
+    val loaded: Boolean = false,
+    /** Firefly is not set up, so there is nothing to suggest. */
+    val notConnected: Boolean = false,
+    val failed: Boolean = false
+)
 
 class TitleMappingsViewModel(application: Application) : AndroidViewModel(application) {
     private val db = (application as FireSmsApp).database
@@ -20,53 +32,55 @@ class TitleMappingsViewModel(application: Application) : AndroidViewModel(applic
     private val _saveResult = MutableStateFlow<String?>(null)
     val saveResult: StateFlow<String?> = _saveResult.asStateFlow()
 
-    private val _categorySuggestions = MutableStateFlow<List<String>>(emptyList())
-    val categorySuggestions: StateFlow<List<String>> = _categorySuggestions.asStateFlow()
+    private val _suggestions = MutableStateFlow(MappingSuggestions())
+    val suggestions: StateFlow<MappingSuggestions> = _suggestions.asStateFlow()
 
-    private val _budgetSuggestions = MutableStateFlow<List<String>>(emptyList())
-    val budgetSuggestions: StateFlow<List<String>> = _budgetSuggestions.asStateFlow()
+    /** Loads suggestions the first time the editor opens; later opens reuse them. */
+    fun ensureSuggestionsLoaded() {
+        val current = _suggestions.value
+        if (current.loading || current.loaded) return
+        loadSuggestions()
+    }
 
-    private val _loadingSuggestions = MutableStateFlow(false)
-    val loadingSuggestions: StateFlow<Boolean> = _loadingSuggestions.asStateFlow()
-
-    init {
+    fun retrySuggestions() {
+        if (_suggestions.value.loading) return
         loadSuggestions()
     }
 
     private fun loadSuggestions() {
+        _suggestions.update { it.copy(loading = true, failed = false, notConnected = false) }
         viewModelScope.launch {
             val baseUrl = prefs.fireflyUrl.first()
             val token = prefs.fireflyToken.first()
-            if (baseUrl.isEmpty() || token.isEmpty()) return@launch
+            if (baseUrl.isEmpty() || token.isEmpty()) {
+                _suggestions.update { it.copy(loading = false, notConnected = true) }
+                return@launch
+            }
 
-            _loadingSuggestions.value = true
             val api = FireflyApi(token)
             try {
-                val categories = api.getCategories(baseUrl)
-                _categorySuggestions.value = categories.map { it.attributes.name }
-
-                val budgets = api.getBudgets(baseUrl)
-                _budgetSuggestions.value = budgets.map { it.attributes.name }
+                val categories = com.firesms.app.data.remote.FireflyLookupCache.categories(api, baseUrl).map { it.attributes.name }
+                val budgets = com.firesms.app.data.remote.FireflyLookupCache.budgets(api, baseUrl).map { it.attributes.name }
+                _suggestions.value = MappingSuggestions(categories = categories, budgets = budgets, loaded = true)
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Exception) {
-                // Firefly not reachable — suggestions stay empty
+                _suggestions.update { it.copy(loading = false, failed = true) }
             } finally {
                 api.close()
-                _loadingSuggestions.value = false
             }
         }
-    }
-
-    fun refreshSuggestions() {
-        loadSuggestions()
     }
 
     fun upsertMapping(rule: TitleMappingRule) {
         viewModelScope.launch {
             try {
                 dao.upsert(rule)
-                _saveResult.value = "Mapping saved"
+                _saveResult.value = "Categorization saved"
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                _saveResult.value = "Error: ${e.message}"
+                _saveResult.value = "Couldn't save the categorization: ${e.message}"
             }
         }
     }

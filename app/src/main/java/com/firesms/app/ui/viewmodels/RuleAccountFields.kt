@@ -50,9 +50,11 @@ enum class AccountCheck {
     NOT_FOUND
 }
 
+private val BY_NAME: Comparator<AccountResource> = compareBy(String.CASE_INSENSITIVE_ORDER) { it.attributes.name }
+
 /** Firefly accounts that fit the given account types, sorted by name. */
 fun List<AccountResource>.ofTypes(types: Set<String>): List<AccountResource> =
-    filter { it.attributes.type in types }.sortedBy { it.attributes.name.lowercase() }
+    filter { it.attributes.type in types }.sortedWith(BY_NAME)
 
 /** ID of the account whose name matches [name] exactly, ignoring case and surrounding spaces. */
 fun List<AccountResource>.idForName(name: String): String? =
@@ -97,6 +99,9 @@ fun checkOtherAccount(
     else -> AccountCheck.WILL_BE_CREATED
 }
 
+/** Which of the rule's two account fields a problem belongs to. */
+enum class AccountSide { OWN, OTHER }
+
 /** Returns a problem with the rule's accounts that would make Firefly reject it, or null. */
 fun validateRuleAccounts(
     transactionType: String,
@@ -106,19 +111,32 @@ fun validateRuleAccounts(
     otherName: String,
     otherId: String?,
     accountsLoaded: Boolean
-): String? {
+): String? = ruleAccountProblem(
+    transactionType, ownName, ownId, accountKeyword, otherName, otherId, accountsLoaded
+)?.second
+
+/** Like [validateRuleAccounts], but also says which account field the problem is in. */
+fun ruleAccountProblem(
+    transactionType: String,
+    ownName: String,
+    ownId: String?,
+    accountKeyword: String,
+    otherName: String,
+    otherId: String?,
+    accountsLoaded: Boolean
+): Pair<AccountSide, String>? {
     val text = accountRoleText(transactionType)
     if (ownName.isBlank() && accountKeyword.isBlank()) {
-        return "Choose your account for \"${text.ownLabel.substringBefore(" (")}\"."
+        return AccountSide.OWN to "Choose your account for \"${text.ownLabel.substringBefore(" (")}\"."
     }
     if (checkOwnAccount(ownName, ownId, accountsLoaded) == AccountCheck.NOT_FOUND) {
-        return "\"${ownName.trim()}\" is not one of your Firefly accounts. Pick it from the list."
+        return AccountSide.OWN to "\"${ownName.trim()}\" is not one of your Firefly accounts. Pick it from the list."
     }
     if (RuleAccounts.otherAccountRequired(transactionType) && otherName.isBlank()) {
-        return "Choose the account for \"${text.otherLabel.substringBefore(" (")}\"."
+        return AccountSide.OTHER to "Choose the account for \"${text.otherLabel.substringBefore(" (")}\"."
     }
     if (checkOtherAccount(otherName, otherId, transactionType, accountsLoaded) == AccountCheck.NOT_FOUND) {
-        return "\"${otherName.trim()}\" is not one of your Firefly accounts. Pick it from the list."
+        return AccountSide.OTHER to "\"${otherName.trim()}\" is not one of your Firefly accounts. Pick it from the list."
     }
     return null
 }

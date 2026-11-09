@@ -8,7 +8,8 @@ class TitleMappingResolver(private val dao: TitleMappingRuleDao) {
 
     /**
      * Returns the first enabled mapping whose titlePattern matches [title]
-     * (case-insensitive contains match). Higher priority rules are checked first.
+     * (case-insensitive contains match). Mappings are checked from the lowest priority number
+     * up (ties by title pattern), so the lowest-numbered match wins.
      */
     suspend fun resolve(title: String): TitleMappingRule? {
         val rules = dao.getAllEnabled().first()

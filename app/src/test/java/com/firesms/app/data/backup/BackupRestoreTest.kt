@@ -39,12 +39,12 @@ class BackupRestoreTest {
         var replacements = 0
         var beforePreferenceWrite: suspend () -> Unit = {}
 
-        suspend fun restore() = restoreBackupState(
-            preferences = importedPreferences,
+        suspend fun restore(imported: AppPreferencesSnapshot = importedPreferences) = restoreBackupState(
+            preferences = imported,
             readPreferences = { preferences },
             writePreferences = { value ->
                 beforePreferenceWrite()
-                if (failPreferences && value == importedPreferences) throw IOException("Preference write failed")
+                if (failPreferences && value != originalPreferences) throw IOException("Preference write failed")
                 if (failCompensation && value == originalPreferences) throw IOException("Compensation failed")
                 preferences = value
             },
@@ -72,6 +72,28 @@ class BackupRestoreTest {
         store.restore()
         assertEquals("imported records", store.records)
         assertEquals(importedPreferences, store.preferences)
+    }
+
+    @Test
+    fun restoreKeepsThisDevicesOnboardingFlag() = runBlocking {
+        val store = Store()
+        store.restore(importedPreferences.copy(onboardingCompleted = false))
+        assertEquals(true, store.preferences.onboardingCompleted)
+        assertEquals("https://imported.example.test", store.preferences.fireflyUrl)
+    }
+
+    @Test
+    fun restoreCarriesDynamicColor() = runBlocking {
+        val store = Store()
+        store.restore(importedPreferences.copy(dynamicColor = true))
+        assertEquals(true, store.preferences.dynamicColor)
+    }
+
+    @Test
+    fun restorePinsLegacySchemeLessAddressToHttp() = runBlocking {
+        val store = Store()
+        store.restore(importedPreferences.copy(fireflyUrl = "192.168.1.10:8080"))
+        assertEquals("http://192.168.1.10:8080", store.preferences.fireflyUrl)
     }
 
     @Test

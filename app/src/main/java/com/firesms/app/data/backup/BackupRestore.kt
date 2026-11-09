@@ -1,6 +1,7 @@
 package com.firesms.app.data.backup
 
 import com.firesms.app.data.local.AppPreferencesSnapshot
+import com.firesms.app.data.local.migrateLegacyFireflyUrl
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -23,11 +24,12 @@ internal suspend fun restoreBackupState(
     currentCoroutineContext().ensureActive()
     withContext(NonCancellable) {
         val previousPreferences = readPreferences()
+        val restoredPreferences = preferences.preparedForRestore(previousPreferences)
         var preferencesWritten = false
         try {
             transaction {
                 replaceRecords()
-                writePreferences(preferences)
+                writePreferences(restoredPreferences)
                 preferencesWritten = true
             }
         } catch (error: Exception) {
@@ -42,3 +44,15 @@ internal suspend fun restoreBackupState(
         }
     }
 }
+
+/**
+ * The preferences actually written for a restore.
+ *
+ * - The onboarding flag stays as it is on this device: it describes this install, not a setting.
+ * - A scheme-less server address comes from a version that assumed `http://`; it is pinned to
+ *   that, matching the one-time preference migration, instead of silently switching to https.
+ */
+internal fun AppPreferencesSnapshot.preparedForRestore(current: AppPreferencesSnapshot) = copy(
+    fireflyUrl = migrateLegacyFireflyUrl(fireflyUrl),
+    onboardingCompleted = current.onboardingCompleted
+)

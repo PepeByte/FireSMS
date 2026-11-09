@@ -6,13 +6,13 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ParserRuleDao {
-    @Query("SELECT * FROM parser_rules ORDER BY priority ASC")
+    @Query("SELECT * FROM parser_rules ORDER BY priority ASC, name COLLATE NOCASE ASC")
     fun getAll(): Flow<List<ParserRule>>
 
     @Query("SELECT * FROM parser_rules")
     suspend fun getAllForBackup(): List<ParserRule>
 
-    @Query("SELECT * FROM parser_rules WHERE enabled = 1 ORDER BY priority ASC")
+    @Query("SELECT * FROM parser_rules WHERE enabled = 1 ORDER BY priority ASC, name COLLATE NOCASE ASC")
     fun getAllEnabledOrderedByPriority(): Flow<List<ParserRule>>
 
     @Query("SELECT * FROM parser_rules WHERE id = :id LIMIT 1")

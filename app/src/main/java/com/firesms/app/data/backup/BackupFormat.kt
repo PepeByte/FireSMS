@@ -35,6 +35,20 @@ data class BackupSummary(
 ) {
     val totalRecords: Int
         get() = smsLogs + pendingTransactions + parserRules + titleMappingRules
+
+    /** What a finished restore tells the user, including that the connection was replaced. */
+    fun restoreMessage(): String =
+        "Backup restored: " +
+            listOf(
+                count(parserRules, "rule", "rules"),
+                count(smsLogs, "history entry", "history entries"),
+                count(pendingTransactions, "queued item", "queued items"),
+                count(titleMappingRules, "mapping", "mappings")
+            ).joinToString(", ") +
+            ". Firefly connection settings were replaced with the ones in the backup."
+
+    private fun count(value: Int, singular: String, plural: String) =
+        "$value ${if (value == 1) singular else plural}"
 }
 
 /** The on-disk format and preflight checks, independent of Android storage APIs. */
@@ -63,7 +77,7 @@ internal object BackupFormat {
             "Backup version ${backup.version} is not supported by this app version"
         }
         require(backup.smsLogs.all { it.id > 0 }) { "Backup contains an invalid SMS log ID" }
-        require(backup.smsLogs.all { it.status in setOf("pending", "success", "failed", "unparsed") }) {
+        require(backup.smsLogs.all { it.status in setOf("pending", "success", "queued", "failed", "unparsed") }) {
             "Backup contains an invalid SMS status"
         }
         require(backup.pendingTransactions.all { it.id > 0 }) {

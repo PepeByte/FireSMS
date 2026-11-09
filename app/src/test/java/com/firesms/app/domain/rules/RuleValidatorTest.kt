@@ -41,7 +41,7 @@ class RuleValidatorTest {
     @Test
     fun `invalid date format is rejected`() {
         val error = assertNotNull(validate(datePattern = "{{merchant}}", dateFormat = "yyyy-MM-dd T"))
-        assertTrue(error.contains("date format"))
+        assertTrue(error.contains("valid date format"), error)
     }
 
     @Test
@@ -49,6 +49,6 @@ class RuleValidatorTest {
         val error = assertNotNull(
             validate(amountTemplate = "{{total}}", label = { if (it == "bodyPattern") "Body pattern" else it })
         )
-        assertEquals("amountTemplate references {{total}}, which is missing from Body pattern.", error)
+        assertTrue(error.startsWith("amountTemplate uses {{total}}, but Body pattern doesn't capture a value called \"total\"."), error)
     }
 }

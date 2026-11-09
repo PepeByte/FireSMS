@@ -10,10 +10,8 @@ import androidx.core.app.NotificationCompat
 import com.firesms.app.MainActivity
 import com.firesms.app.data.local.AppDatabase
 import com.firesms.app.data.local.DataMaintenanceLock
-import com.firesms.app.data.local.entity.SmsLog
-import com.firesms.app.domain.parser.SmsParser
+import com.firesms.app.data.local.decodeTransactionSnapshot
 import kotlinx.coroutines.*
-import java.security.MessageDigest
 
 class SmsProcessingService : Service() {
 
@@ -21,22 +19,17 @@ class SmsProcessingService : Service() {
         private const val TAG = "SmsProcessingService"
         private const val NOTIFICATION_ID = 1
 
-        fun smsHash(sender: String, body: String, receivedAt: Long): String {
-            val digest = MessageDigest.getInstance("SHA-256")
-            return digest.digest("$sender|$body|$receivedAt".toByteArray())
-                .joinToString("") { "%02x".format(it) }
-        }
+        fun smsHash(sender: String, body: String, receivedAt: Long): String =
+            SmsTransactionProcessor.smsHash(sender, body, receivedAt)
     }
 
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private lateinit var db: AppDatabase
-    private lateinit var parser: SmsParser
     private lateinit var processor: SmsTransactionProcessor
 
     override fun onCreate() {
         super.onCreate()
         db = AppDatabase.getInstance(this)
-        parser = SmsParser(db.parserRuleDao())
         processor = SmsTransactionProcessor(applicationContext)
     }
 
@@ -86,41 +79,45 @@ class SmsProcessingService : Service() {
         receivedAt: Long,
         retryLogId: Long?
     ) {
-        val smsLogDao = db.smsLogDao()
-
         if (retryLogId != null) {
             // Manual retry re-uses the existing log row and skips already-synced transactions.
             processor.retryFailed(retryLogId)
             return
         }
 
-        // Defensive sender match check (catches manual service starts)
-        if (!parser.senderMatchesAnyEnabledRule(sender)) {
-            Log.d(TAG, "Ignoring SMS from sender with no enabled parser rule match: $sender")
-            return
+        when (val result = processor.ingest(sender, body, receivedAt)) {
+            SmsTransactionProcessor.IngestResult.NoRuleForSender ->
+                Log.d(TAG, "Ignoring SMS from sender with no enabled parser rule match: $sender")
+            SmsTransactionProcessor.IngestResult.Duplicate ->
+                Log.d(TAG, "Duplicate SMS detected, skipping")
+            is SmsTransactionProcessor.IngestResult.Processed -> {
+                Log.d(TAG, "Processed SMS from $sender: ${result.outcome}")
+                notifyIfNeedsAttention(result)
+            }
         }
+    }
 
-        val hash = smsHash(sender, body, receivedAt)
-        if (smsLogDao.findByHash(hash) != null) {
-            Log.d(TAG, "Duplicate SMS detected, skipping")
-            return
+    /** Messages the user has to act on get their own notification; queued ones retry silently. */
+    private suspend fun notifyIfNeedsAttention(result: SmsTransactionProcessor.IngestResult.Processed) {
+        when (val outcome = result.outcome) {
+            SmsTransactionProcessor.Outcome.Unparsed -> {
+                val log = db.smsLogDao().getById(result.smsLogId) ?: return
+                showUnparsedSmsNotification(this, log.id, log.sender)
+            }
+            SmsTransactionProcessor.Outcome.NotConfigured ->
+                showSyncFailedNotification(this, result.smsLogId, null, "Firefly isn't set up yet")
+            is SmsTransactionProcessor.Outcome.Failed -> {
+                val log = db.smsLogDao().getById(result.smsLogId)
+                showSyncFailedNotification(
+                    this,
+                    result.smsLogId,
+                    log?.let { decodeTransactionSnapshot(it.transactionSnapshotJson)?.displayDescription() ?: it.sender },
+                    outcome.message
+                )
+            }
+            is SmsTransactionProcessor.Outcome.Created,
+            is SmsTransactionProcessor.Outcome.Queued -> Unit
         }
-
-        val log = SmsLog(
-            smsHash = hash,
-            sender = sender,
-            body = body,
-            receivedAt = receivedAt,
-            status = "pending"
-        )
-        val insertedId = smsLogDao.insert(log)
-        if (insertedId <= 0L) {
-            Log.w(TAG, "Insert returned $insertedId, aborting processing")
-            return
-        }
-
-        val outcome = processor.process(log.copy(id = insertedId))
-        Log.d(TAG, "Processed SMS from $sender: $outcome")
     }
 
     private fun buildNotification(): Notification {

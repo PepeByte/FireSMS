@@ -11,6 +11,12 @@
   the app performs no browsing, renders no remote web content, and never loads third-party
   assets, so relaxing these rules cannot expose unrelated traffic. The Firefly III instance and
   its access token are chosen by the user, who already trusts that server.
+
+  Cleartext stays allowed for LAN-only servers, but it is no longer the silent default: an
+  address typed without a scheme is stored as https://, and Settings/onboarding warn under the
+  URL field whenever http:// is used, because the access token then travels unencrypted.
+  Addresses saved by older versions without a scheme were migrated to http:// once
+  (PreferencesManager.LegacyUrlSchemeMigration) so existing installs keep working.
 -->
 <network-security-config xmlns:tools="http://schemas.android.com/tools">
     <!-- tools:ignore below acknowledges the intended cleartext + private-CA support. -->

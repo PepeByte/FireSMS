@@ -163,11 +163,49 @@ class BackupFormatTest {
     }
 
     @Test
+    fun queuedStatusRoundTrips() {
+        val backup = populatedBackup().let { it.copy(smsLogs = it.smsLogs.map { log -> log.copy(status = "queued") }) }
+        assertEquals(backup, BackupFormat.decode(BackupFormat.encode(backup)))
+    }
+
+    @Test
     fun unknownFieldsRemainForwardCompatible() {
         val backup = populatedBackup()
         val fields = Json.parseToJsonElement(BackupFormat.encode(backup)).jsonObject.toMutableMap()
         fields["futureField"] = JsonPrimitive("ignored")
         assertEquals(backup, BackupFormat.decode(JsonObject(fields).toString()))
+    }
+
+    @Test
+    fun dynamicColorPreferenceRoundTrips() {
+        val base = populatedBackup()
+        val backup = base.copy(preferences = base.preferences.copy(dynamicColor = true))
+        val decoded = BackupFormat.decode(BackupFormat.encode(backup))
+        assertEquals(true, decoded.preferences.dynamicColor)
+        assertEquals(backup, decoded)
+    }
+
+    @Test
+    fun backupWithoutDynamicColorStillDecodes() {
+        val backup = populatedBackup()
+        val fields = Json.parseToJsonElement(BackupFormat.encode(backup)).jsonObject.toMutableMap()
+        val preferences = fields.getValue("preferences").jsonObject.toMutableMap()
+        preferences.remove("dynamicColor")
+        fields["preferences"] = JsonObject(preferences)
+        val decoded = BackupFormat.decode(JsonObject(fields).toString())
+        assertEquals(false, decoded.preferences.dynamicColor)
+        assertEquals(backup.preferences.fireflyUrl, decoded.preferences.fireflyUrl)
+    }
+
+    @Test
+    fun restoreMessageBreaksDownEveryRecordType() {
+        val message = BackupSummary(smsLogs = 12, pendingTransactions = 1, parserRules = 3, titleMappingRules = 0)
+            .restoreMessage()
+        assertTrue(message.contains("3 rules"), message)
+        assertTrue(message.contains("12 history entries"), message)
+        assertTrue(message.contains("1 queued item,"), message)
+        assertTrue(message.contains("0 mappings"), message)
+        assertTrue(message.contains("Firefly connection settings were replaced"), message)
     }
 
     @Test

@@ -9,13 +9,16 @@ import androidx.lifecycle.viewModelScope
 import com.firesms.app.FireSmsApp
 import com.firesms.app.data.backup.BackupRepository
 import com.firesms.app.data.local.HistoryRetention
+import com.firesms.app.data.remote.ConnectionCheckResult
 import com.firesms.app.data.remote.FireflyApi
 import com.firesms.app.data.remote.networkErrorMessage
+import com.firesms.app.data.remote.normalizeFireflyUrl
 import com.firesms.app.data.update.UpdateSnapshot
 import com.firesms.app.worker.configureHistoryCleanup
 import com.firesms.app.worker.FailedTransactionRetryWorker
 import com.firesms.app.worker.updateFailedRetryNetworkPolicy
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -37,6 +40,13 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     val historyRetention: StateFlow<String> = prefs.historyRetention
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), HistoryRetention.NEVER.value)
+
+    val dynamicColor: StateFlow<Boolean> = prefs.dynamicColor
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    fun setDynamicColor(enabled: Boolean) {
+        viewModelScope.launch { prefs.setDynamicColor(enabled) }
+    }
 
     val updateSnapshot = app.updateRepository.state
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), UpdateSnapshot())
@@ -165,9 +175,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                         cancelUniqueWork("history_cleanup_now").await()
                     }
                 }
-                _dataTransferState.value = DataTransferState.Success(
-                    "Backup restored (${summary.totalRecords} records)"
-                )
+                _dataTransferState.value = DataTransferState.Success(summary.restoreMessage())
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -189,13 +197,17 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         _dataTransferState.value = null
     }
 
+    /** Forgets the last result and drops a test still running for inputs that just changed. */
     fun clearTestResult() {
+        testJob?.cancel()
+        testJob = null
+        _isTesting.value = false
         _testResult.value = null
     }
+
     fun saveSettings(url: String, token: String, syncNetworkPolicy: String? = null) {
         viewModelScope.launch {
-            prefs.setFireflyUrl(url.trimEnd('/'))
-            prefs.setFireflyToken(token)
+            prefs.setFireflyConnection(normalizeFireflyUrl(url), token.trim())
             if (syncNetworkPolicy != null) {
                 prefs.setSyncNetworkPolicy(syncNetworkPolicy)
                 updateFailedRetryNetworkPolicy(getApplication())
@@ -203,25 +215,74 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun testConnection(url: String, token: String) {
-        viewModelScope.launch {
+    /** Tests the connection; with [saveOnSuccess] the details are stored only once they work. */
+    fun testConnection(url: String, token: String, saveOnSuccess: Boolean = false) {
+        runConnectionTest(url, token) { result ->
+            if (saveOnSuccess && result == TestResult.Success) {
+                prefs.setFireflyConnection(normalizeFireflyUrl(url), token.trim())
+                _connectionSaved.tryEmit(Unit)
+            }
+        }
+    }
+
+    /** Stores the details first, then tests them, so Settings never leaves edits half-applied. */
+    fun saveAndTestConnection(url: String, token: String) {
+        runConnectionTest(url, token, beforeTest = {
+            prefs.setFireflyConnection(normalizeFireflyUrl(url), token.trim())
+            _connectionSaved.tryEmit(Unit)
+        })
+    }
+
+    private var testJob: Job? = null
+
+    private val _connectionSaved = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
+    /** Emits each time connection details were written by a test or save-and-test. */
+    val connectionSaved: SharedFlow<Unit> = _connectionSaved.asSharedFlow()
+
+    private fun runConnectionTest(
+        url: String,
+        token: String,
+        beforeTest: suspend () -> Unit = {},
+        afterTest: suspend (TestResult) -> Unit = {}
+    ) {
+        testJob?.cancel()
+        testJob = viewModelScope.launch {
             _isTesting.value = true
             _testResult.value = null
-            val api = FireflyApi(token)
             try {
-                val success = api.testConnection(url.trimEnd('/'))
-                _testResult.value = if (success) {
-                    TestResult.Success
-                } else {
-                    TestResult.Failure("Server rejected the request. Check the URL and access token.")
+                beforeTest()
+                val result = when (val check = FireflyApi(token).checkConnection(normalizeFireflyUrl(url))) {
+                    ConnectionCheckResult.Success -> TestResult.Success
+                    is ConnectionCheckResult.Failure -> TestResult.Failure(check.message)
                 }
+                afterTest(result)
+                _testResult.value = result
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 _testResult.value = TestResult.Failure(networkErrorMessage(e))
             } finally {
-                _isTesting.value = false
+                // A test replaced by a newer one must not clear the newer one's progress.
+                val current = testJob
+                if (current == null || current === coroutineContext[Job]) _isTesting.value = false
             }
         }
     }
+}
+
+/**
+ * Whether switching retention from [current] to [selected] deletes history that is kept today,
+ * which is when the app asks before saving.
+ */
+internal fun retentionDeletesMoreHistory(current: HistoryRetention, selected: HistoryRetention): Boolean =
+    retentionDays(selected) < retentionDays(current)
+
+private fun retentionDays(retention: HistoryRetention): Int = when (retention) {
+    HistoryRetention.NEVER -> Int.MAX_VALUE
+    HistoryRetention.SEVEN_DAYS -> 7
+    HistoryRetention.ONE_MONTH -> 30
+    HistoryRetention.THREE_MONTHS -> 91
+    HistoryRetention.SIX_MONTHS -> 182
+    HistoryRetention.ONE_YEAR -> 365
 }

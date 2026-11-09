@@ -6,13 +6,13 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface TitleMappingRuleDao {
-    @Query("SELECT * FROM title_mapping_rules ORDER BY priority ASC")
+    @Query("SELECT * FROM title_mapping_rules ORDER BY priority ASC, title_pattern COLLATE NOCASE ASC")
     fun getAll(): Flow<List<TitleMappingRule>>
 
     @Query("SELECT * FROM title_mapping_rules")
     suspend fun getAllForBackup(): List<TitleMappingRule>
 
-    @Query("SELECT * FROM title_mapping_rules WHERE enabled = 1 ORDER BY priority ASC")
+    @Query("SELECT * FROM title_mapping_rules WHERE enabled = 1 ORDER BY priority ASC, title_pattern COLLATE NOCASE ASC")
     fun getAllEnabled(): Flow<List<TitleMappingRule>>
 
     @Query("SELECT * FROM title_mapping_rules WHERE id = :id LIMIT 1")

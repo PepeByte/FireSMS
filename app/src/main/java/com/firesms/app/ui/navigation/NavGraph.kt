@@ -26,7 +26,10 @@ object Routes {
 @Composable
 fun NavGraph(
     navController: NavHostController,
-    startDestination: String = Routes.ONBOARDING
+    startDestination: String = Routes.ONBOARDING,
+    /** SMS log whose detail sheet Home should open (from a notification), consumed via [onDetailRequestHandled]. */
+    detailRequestLogId: Long? = null,
+    onDetailRequestHandled: () -> Unit = {}
 ) {
     val navigateTopLevel: (String) -> Unit = { route ->
         navController.navigate(route) {
@@ -53,7 +56,9 @@ fun NavGraph(
                 onNavigateToUnparsed = { navController.navigate(Routes.UNPARSED) },
                 onNavigateToEditTransaction = { smsLogId ->
                     navController.navigate(Routes.editTransaction(smsLogId))
-                }
+                },
+                initialDetailLogId = detailRequestLogId,
+                onDetailRequestHandled = onDetailRequestHandled
             )
         }
         composable(Routes.RULES) {
@@ -86,7 +91,8 @@ fun NavGraph(
                 onNavigateToRule = { smsLogId ->
                     navController.navigate(Routes.newRuleFromSms(smsLogId))
                 },
-                onBack = { navController.popBackStack() }
+                onBack = { navController.popBackStack() },
+                onOpenSettings = { navigateTopLevel(Routes.SETTINGS) }
             )
         }
         composable(Routes.SETTINGS) {

@@ -10,7 +10,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.firesms.app.data.remote.AccountResource
+import com.firesms.app.ui.theme.FireSmsTheme
 import com.firesms.app.ui.viewmodels.AccountCheck
+
+private const val MAX_SUGGESTIONS = 20
 
 /**
  * Text field that searches Firefly accounts and shows whether the entered name exists there.
@@ -27,14 +30,17 @@ fun FireflyAccountField(
     candidates: List<AccountResource>,
     check: AccountCheck,
     loading: Boolean,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** A save error for this field, shown instead of the account check message. */
+    errorText: String? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
     val suggestions = remember(candidates, value) {
         val query = value.trim()
-        candidates
+        candidates.asSequence()
             .filter { query.isEmpty() || it.attributes.name.contains(query, ignoreCase = true) }
-            .take(20)
+            .take(MAX_SUGGESTIONS)
+            .toList()
     }
     val menuVisible = expanded && suggestions.isNotEmpty()
 
@@ -52,19 +58,19 @@ fun FireflyAccountField(
             label = { Text(label) },
             placeholder = { Text(placeholder) },
             singleLine = true,
-            isError = check == AccountCheck.NOT_FOUND,
+            isError = errorText != null || check == AccountCheck.NOT_FOUND,
             trailingIcon = {
                 when {
                     loading -> CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                     check == AccountCheck.FOUND -> Icon(
                         Icons.Default.CheckCircle,
                         contentDescription = "Found in Firefly",
-                        tint = MaterialTheme.colorScheme.primary
+                        tint = FireSmsTheme.colors.success
                     )
                     else -> ExposedDropdownMenuDefaults.TrailingIcon(expanded = menuVisible)
                 }
             },
-            supportingText = accountCheckMessage(check)?.let { message -> @Composable { Text(message) } },
+            supportingText = (errorText ?: accountCheckMessage(check))?.let { message -> @Composable { Text(message) } },
             modifier = Modifier
                 .fillMaxWidth()
                 .menuAnchor(MenuAnchorType.PrimaryEditable, enabled = true)

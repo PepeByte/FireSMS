@@ -22,7 +22,7 @@ class RuleEditStateImportTest {
             otherAccountName = "Merchant",
             otherAccountId = "account-2",
             type = "deposit",
-            priority = 3,
+            priorityText = "3",
             datePattern = "old date",
             dateFormat = "old format",
             remarksPattern = "old remarks",
@@ -57,8 +57,58 @@ class RuleEditStateImportTest {
         assertEquals(original.ownAccountId, result.ownAccountId)
         assertEquals(original.otherAccountName, result.otherAccountName)
         assertEquals(original.otherAccountId, result.otherAccountId)
-        assertEquals(original.priority, result.priority)
+        assertEquals(original.priorityText, result.priorityText)
         assertEquals(original.saving, result.saving)
+    }
+
+    @Test
+    fun `undo restores the fields an import replaced`() {
+        val before = RuleEditState(
+            bodyPattern = "old (?<amount>\\d+)",
+            descriptionValue = "Old",
+            type = "deposit",
+            otherAccountName = "Employer",
+            otherAccountId = "7",
+            remarksTemplate = "old"
+        )
+        val imported = before.withTransactionType("withdrawal").withImportedRuleFields(
+            ImportedRuleFields(
+                bodyPattern = "(?<amount>\\d+)",
+                amountTemplate = "{{amount}}",
+                descriptionSource = "template",
+                descriptionValue = "New",
+                type = "withdrawal",
+                datePattern = "",
+                dateFormat = "",
+                remarksPattern = "",
+                remarksTemplate = ""
+            )
+        ).copy(name = "Typed after import")
+
+        val undone = imported.withImportUndone(before)
+        assertEquals(before.bodyPattern, undone.bodyPattern)
+        assertEquals("Old", undone.descriptionValue)
+        assertEquals("deposit", undone.type)
+        assertEquals("7", undone.otherAccountId)
+        assertEquals("old", undone.remarksTemplate)
+        assertEquals("Typed after import", undone.name)
+    }
+
+    @Test
+    fun `candidates are computed when accounts or type change`() {
+        fun account(id: String, name: String, type: String) = com.firesms.app.data.remote.AccountResource(
+            id = id,
+            attributes = com.firesms.app.data.remote.AccountAttributes(name = name, type = type)
+        )
+        val state = RuleEditState().withAccounts(
+            listOf(account("1", "savings", "asset"), account("2", "Checking", "asset"), account("3", "Shop", "expense"))
+        )
+        assertEquals(listOf("Checking", "savings"), state.ownAccountCandidates.map { it.attributes.name })
+        assertEquals(listOf("Shop"), state.otherAccountCandidates.map { it.attributes.name })
+        assertEquals(
+            listOf("Checking", "savings"),
+            state.withTransactionType("transfer").otherAccountCandidates.map { it.attributes.name }
+        )
     }
 
     @Test

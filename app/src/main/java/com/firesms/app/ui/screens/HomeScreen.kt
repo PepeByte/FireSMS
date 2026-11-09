@@ -1,56 +1,87 @@
 package com.firesms.app.ui.screens
 
 import android.Manifest
+import android.app.Activity
 import android.content.ClipData
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.CloudDone
+import androidx.compose.material.icons.outlined.CloudSync
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.EditNote
+import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.Inbox
+import androidx.compose.material.icons.automirrored.outlined.Rule
+import androidx.compose.material.icons.outlined.SearchOff
+import androidx.compose.material.icons.outlined.SmsFailed
+import androidx.compose.material.icons.outlined.TaskAlt
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.firesms.app.data.local.canRetryFailedTransaction
+import androidx.paging.LoadState
+import androidx.paging.compose.collectAsLazyPagingItems
+import androidx.paging.compose.itemContentType
+import androidx.paging.compose.itemKey
+import com.firesms.app.data.local.ActivityCounts
 import com.firesms.app.ui.components.FireSmsBottomBar
 import com.firesms.app.ui.components.FireSmsConfirmDialog
 import com.firesms.app.ui.components.FireSmsEmptyState
 import com.firesms.app.ui.components.FireSmsListCard
 import com.firesms.app.ui.components.FireSmsScaffold
-import com.firesms.app.ui.components.FireSmsTopLevelDestination
 import com.firesms.app.ui.components.FireSmsStatusPill
-import com.firesms.app.ui.components.formatDisplayAmount
+import com.firesms.app.ui.components.FireSmsTopLevelDestination
 import com.firesms.app.ui.components.statusColor
 import com.firesms.app.ui.components.statusLabel
-import com.firesms.app.data.local.StoredTransactionSnapshot
-import com.firesms.app.data.local.StoredTransactionSplit
-import com.firesms.app.ui.viewmodels.HomeTransactionItem
+import com.firesms.app.ui.theme.FireSmsTheme
+import com.firesms.app.ui.viewmodels.ActivityDetail
+import com.firesms.app.ui.viewmodels.ActivityFilter
+import com.firesms.app.ui.viewmodels.ActivityListItem
+import com.firesms.app.ui.viewmodels.ActivityRow
+import com.firesms.app.ui.viewmodels.AmountDirection
+import com.firesms.app.ui.viewmodels.HealthLine
 import com.firesms.app.ui.viewmodels.HomeViewModel
+import com.firesms.app.ui.viewmodels.UiMessageAction
+import com.firesms.app.ui.viewmodels.healthLineMessage
+import com.firesms.app.ui.viewmodels.healthLineTitle
+import com.firesms.app.ui.viewmodels.healthLines
 import kotlinx.coroutines.launch
-import java.math.BigDecimal
-import java.time.Instant
-import java.time.LocalDate
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -59,57 +90,67 @@ fun HomeScreen(
     onNavigateToSettings: () -> Unit,
     onNavigateToUnparsed: () -> Unit,
     onNavigateToEditTransaction: (Long) -> Unit,
+    /** Opens this SMS log's detail sheet, e.g. from a "couldn't sync" notification; then [onDetailRequestHandled]. */
+    initialDetailLogId: Long? = null,
+    onDetailRequestHandled: () -> Unit = {},
     viewModel: HomeViewModel = viewModel()
 ) {
-    val logs by viewModel.logs.collectAsState()
-    val unparsedCount by viewModel.unparsedCount.collectAsState()
-    val pendingCount by viewModel.pendingCount.collectAsState()
-    val retryWork by viewModel.failedRetryWork.collectAsState()
-    val isSchedulingRetry by viewModel.isSchedulingRetry.collectAsState()
-    val retryError by viewModel.retryError.collectAsState()
+    val activityItems = viewModel.activity.collectAsLazyPagingItems()
+    val counts by viewModel.counts.collectAsStateWithLifecycle()
+    val filter by viewModel.filter.collectAsStateWithLifecycle()
+    val query by viewModel.query.collectAsStateWithLifecycle()
+    val detail by viewModel.detail.collectAsStateWithLifecycle()
+    val selectedLogId by viewModel.selectedLogId.collectAsStateWithLifecycle()
+    // Only the record that is actually selected; a deleted or not-yet-loaded record shows no sheet.
+    val openDetail = detail?.takeIf { it.log.id == selectedLogId }
+    val retryingLogId by viewModel.retryingLogId.collectAsStateWithLifecycle()
+    val retryWork by viewModel.failedRetryWork.collectAsStateWithLifecycle()
+    val isSchedulingRetry by viewModel.isSchedulingRetry.collectAsStateWithLifecycle()
+    val isProcessingSample by viewModel.isProcessingSample.collectAsStateWithLifecycle()
     val isRetryingFailed = isSchedulingRetry || retryWork != null
-    val failedCount = logs.count { it.log.canRetryFailedTransaction }
     val snackbarHostState = remember { SnackbarHostState() }
-    val context = LocalContext.current
+    val smsPermission = rememberSmsPermissionState()
+    val lifecycleOwner = LocalLifecycleOwner.current
 
-    LaunchedEffect(retryError) {
-        retryError?.let { message ->
-            snackbarHostState.showSnackbar(message)
-            viewModel.clearRetryError()
-        }
-    }
-
-    var showTestDialog by remember { mutableStateOf(false) }
-    var testSender by remember { mutableStateOf("") }
-    var testBody by remember { mutableStateOf("") }
-    var detailLogId by remember { mutableStateOf<Long?>(null) }
-    var activityFilter by rememberSaveable { mutableStateOf(ActivityFilter.ALL) }
+    var showTestDialog by rememberSaveable { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
     var showRetryConfirm by rememberSaveable { mutableStateOf(false) }
 
-    val smsPermissionStatus = ContextCompat.checkSelfPermission(
-        context,
-        Manifest.permission.RECEIVE_SMS
-    )
-    val hasSmsPermission = smsPermissionStatus == PackageManager.PERMISSION_GRANTED
-    val detailLog = detailLogId?.let { selectedId -> logs.firstOrNull { it.log.id == selectedId } }
-    val filteredLogs = remember(logs, activityFilter) {
-        logs.filter { item ->
-            when (activityFilter) {
-                ActivityFilter.ALL -> true
-                ActivityFilter.NEEDS_ATTENTION -> item.log.status in setOf("failed", "unparsed")
-                ActivityFilter.PENDING -> item.log.status == "pending"
-                ActivityFilter.MODIFIED -> item.isModified
-            }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refreshFormatting() }
+
+    LaunchedEffect(initialDetailLogId) {
+        if (initialDetailLogId != null && initialDetailLogId > 0) {
+            viewModel.openDetail(initialDetailLogId)
+            onDetailRequestHandled()
         }
     }
-    val groupedLogs = remember(filteredLogs) {
-        filteredLogs.groupBy { item -> activityDateLabel(item.log.receivedAt) }
+
+    LaunchedEffect(viewModel, lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            viewModel.events.collect { message ->
+                snackbarHostState.currentSnackbarData?.dismiss()
+                val result = snackbarHostState.showSnackbar(
+                    message = message.text,
+                    actionLabel = message.action?.label,
+                    duration = if (message.action != null) SnackbarDuration.Long else SnackbarDuration.Short
+                )
+                if (result == SnackbarResult.ActionPerformed) {
+                    when (message.action) {
+                        UiMessageAction.OPEN_SETTINGS -> onNavigateToSettings()
+                        UiMessageAction.OPEN_UNPARSED -> onNavigateToUnparsed()
+                        UiMessageAction.OPEN_RULES -> onNavigateToRules()
+                        UiMessageAction.SHOW_ATTENTION -> viewModel.setFilter(ActivityFilter.NEEDS_ATTENTION)
+                        null -> Unit
+                    }
+                }
+            }
+        }
     }
 
     FireSmsScaffold(
         title = "Activity",
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        // The detail sheet is its own window; it hosts the snackbar while it is open.
+        snackbarHost = { if (openDetail == null) SnackbarHost(snackbarHostState) },
         actions = {
             Box {
                 IconButton(onClick = { showMoreMenu = true }) {
@@ -120,7 +161,8 @@ fun HomeScreen(
                     onDismissRequest = { showMoreMenu = false }
                 ) {
                     DropdownMenuItem(
-                        text = { Text("Process sample SMS") },
+                        text = { Text(if (isProcessingSample) "Processing sample SMS…" else "Process sample SMS") },
+                        enabled = !isProcessingSample,
                         onClick = {
                             showMoreMenu = false
                             showTestDialog = true
@@ -138,88 +180,96 @@ fun HomeScreen(
             )
         }
     ) { padding ->
-        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+        Box(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentAlignment = Alignment.TopCenter
+        ) {
+            val refreshState = activityItems.loadState.refresh
             LazyColumn(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.widthIn(max = 760.dp).fillMaxSize(),
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                item {
-                    ActivityHealthPanel(
-                        hasSmsPermission = hasSmsPermission,
-                        pendingCount = pendingCount,
-                        unparsedCount = unparsedCount,
-                        failedCount = failedCount,
-                        onNeedsAttention = onNavigateToUnparsed,
-                        onPermissionSettings = onNavigateToSettings
-                    )
-                }
+                counts?.let { loadedCounts ->
+                    item(key = "health", contentType = "health") {
+                        ActivityHealthPanel(
+                            lines = healthLines(smsPermission.isGranted, loadedCounts),
+                            onRequestPermission = smsPermission.request,
+                            onReviewUnparsed = onNavigateToUnparsed,
+                            onShowFailed = { viewModel.setFilter(ActivityFilter.NEEDS_ATTENTION) }
+                        )
+                    }
 
-                if (failedCount > 0) {
-                    item(key = "retry-failed") {
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            OutlinedButton(
-                                onClick = { showRetryConfirm = true },
-                                enabled = !isRetryingFailed && failedCount > 0,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Icon(Icons.Default.Refresh, contentDescription = null)
-                                Spacer(Modifier.width(8.dp))
-                                Text(when {
-                                    retryWork?.isRunning == true -> "Retrying ${retryWork?.completed} / ${retryWork?.total}"
-                                    isRetryingFailed -> "Retry queued"
-                                    else -> "Retry failed ($failedCount)"
-                                })
-                            }
-                            if (isRetryingFailed && retryWork?.isRunning != true) {
-                                Text(
-                                    "Retries start when your network preference allows.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
+                    if (loadedCounts.retryable > 0) {
+                        item(key = "retry-failed", contentType = "retry") {
+                            RetryAllButton(
+                                counts = loadedCounts,
+                                isRetrying = isRetryingFailed,
+                                progressText = retryWork?.takeIf { it.isRunning }
+                                    ?.let { "Retrying ${it.completed} / ${it.total}" },
+                                onClick = { showRetryConfirm = true }
+                            )
                         }
                     }
                 }
 
-                item {
+                item(key = "search", contentType = "search") {
+                    ActivitySearchField(query = query, onQueryChange = viewModel::setQuery)
+                }
+
+                item(key = "filters", contentType = "filters") {
                     Row(
                         modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        ActivityFilter.entries.forEach { filter ->
+                        ActivityFilter.entries.forEach { option ->
+                            val count = counts?.let { option.count(it) } ?: 0
                             FilterChip(
-                                selected = activityFilter == filter,
-                                onClick = { activityFilter = filter },
-                                label = { Text(filter.label) }
+                                selected = filter == option,
+                                onClick = { viewModel.setFilter(option) },
+                                label = { Text(if (count > 0) "${option.label} ($count)" else option.label) }
                             )
                         }
                     }
                 }
 
-                if (filteredLogs.isEmpty()) {
-                    item {
-                        FireSmsEmptyState(
-                            title = if (logs.isEmpty()) "No activity yet" else "Nothing in this view",
-                            message = if (logs.isEmpty()) {
-                                "Transactions will appear here when FireSMS receives a matching bank message."
-                            } else {
-                                "Try another filter to see more activity."
+                when {
+                    activityItems.itemCount == 0 && (refreshState is LoadState.Loading || counts == null) -> {
+                        item(key = "loading", contentType = "loading") {
+                            Box(Modifier.fillMaxWidth().padding(vertical = 48.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator()
                             }
-                        )
+                        }
                     }
-                } else {
-                    groupedLogs.forEach { (dateLabel, dateItems) ->
-                        item(key = "header-$dateLabel") {
-                            Text(
-                                dateLabel,
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(top = 8.dp, bottom = 2.dp)
+                    activityItems.itemCount == 0 -> {
+                        item(key = "empty", contentType = "empty") {
+                            ActivityEmptyState(
+                                hasAnyActivity = (counts?.total ?: 0) > 0,
+                                filter = filter,
+                                query = query.trim(),
+                                loadFailed = refreshState is LoadState.Error
                             )
                         }
-                        items(dateItems, key = { it.log.id }) { item ->
-                            SmsLogCard(item = item, onClick = { detailLogId = item.log.id })
+                    }
+                    else -> {
+                        items(
+                            count = activityItems.itemCount,
+                            key = activityItems.itemKey { it.key },
+                            contentType = activityItems.itemContentType { it.contentType }
+                        ) { index ->
+                            when (val item = activityItems[index]) {
+                                is ActivityListItem.Header -> Text(
+                                    item.label,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(top = 8.dp, bottom = 2.dp)
+                                )
+                                is ActivityListItem.Entry -> SmsLogCard(
+                                    row = item.row,
+                                    onClick = { viewModel.openDetail(item.row.id) }
+                                )
+                                null -> Unit
+                            }
                         }
                     }
                 }
@@ -227,183 +277,288 @@ fun HomeScreen(
         }
     }
 
-
-
     if (showRetryConfirm) {
-        AlertDialog(
-            onDismissRequest = { showRetryConfirm = false },
-            title = { Text("Retry failed transactions?") },
-            text = {
-                Text("Retry all $failedCount failed transactions using your current rules and settings. Synced and unparsed messages are not included.")
+        val total = counts?.retryable ?: 0
+        FireSmsConfirmDialog(
+            title = "Retry $total ${if (total == 1) "transaction" else "transactions"} now?",
+            message = "FireSMS sends failed transactions and those waiting to sync again, using your current " +
+                "rules and settings. Synced and unparsed messages are not included.",
+            confirmText = "Retry now",
+            destructive = false,
+            onConfirm = {
+                showRetryConfirm = false
+                viewModel.retryAllFailedTransactions()
             },
-            confirmButton = {
-                Button(
-                    enabled = failedCount > 0 && !isRetryingFailed,
-                    onClick = {
-                        showRetryConfirm = false
-                        viewModel.retryAllFailedTransactions()
-                    }
-                ) { Text("Retry failed") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showRetryConfirm = false }) { Text("Cancel") }
-            }
+            onDismiss = { showRetryConfirm = false }
         )
     }
 
     if (showTestDialog) {
-        AlertDialog(
-            onDismissRequest = { showTestDialog = false },
-            title = { Text("Add sample SMS") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = testSender,
-                        onValueChange = { testSender = it },
-                        label = { Text("Sender") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = testBody,
-                        onValueChange = { testBody = it },
-                        label = { Text("Body") },
-                        minLines = 2,
-                        maxLines = 4,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    if (testSender.isNotBlank() && testBody.isNotBlank()) {
-                        viewModel.submitTestSms(testSender, testBody)
-                        testSender = ""
-                        testBody = ""
-                        showTestDialog = false
-                    }
-                }) { Text("Save sample") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showTestDialog = false }) { Text("Cancel") }
+        SampleSmsDialog(
+            onDismiss = { showTestDialog = false },
+            onProcess = { sender, body ->
+                showTestDialog = false
+                viewModel.processSampleSms(sender, body)
             }
         )
     }
 
-    detailLog?.let { item ->
-        SmsLogDetailDialog(
-            item = item,
-            onDismiss = { detailLogId = null },
-            onEditTransaction = onNavigateToEditTransaction,
-            onRetry = { viewModel.retryFailedTransaction(item.log) },
-            retryEnabled = !isRetryingFailed,
-            onDelete = { viewModel.deleteSmsLog(item.log); detailLogId = null }
+    openDetail?.let { loaded ->
+        ActivityDetailSheet(
+            detail = loaded,
+            isRetrying = retryingLogId == loaded.log.id,
+            retryEnabled = !isRetryingFailed && retryingLogId == null,
+            snackbarHostState = snackbarHostState,
+            onDismiss = viewModel::closeDetail,
+            onEditTransaction = { onNavigateToEditTransaction(loaded.log.id) },
+            onRetry = { viewModel.retryTransaction(loaded.log.id) },
+            onDelete = { viewModel.deleteSmsLog(loaded.log.id) }
         )
     }
 }
 
-private enum class ActivityFilter(val label: String) {
-    ALL("All"),
-    NEEDS_ATTENTION("Attention"),
-    PENDING("Pending"),
-    MODIFIED("Modified")
+private fun ActivityFilter.count(counts: ActivityCounts): Int = when (this) {
+    ActivityFilter.ALL -> 0
+    ActivityFilter.NEEDS_ATTENTION -> counts.attention
+    ActivityFilter.WAITING -> counts.waiting
+    ActivityFilter.MODIFIED -> counts.modified
 }
+
+// ─── SMS permission ────────────────────────────────────────────
+
+private class SmsPermissionState(val isGranted: Boolean, val request: () -> Unit)
+
+/**
+ * Re-checks RECEIVE_SMS on every resume instead of on every recomposition. Requesting falls back to
+ * the app's system settings page once Android stops showing the permission dialog.
+ */
+@Composable
+private fun rememberSmsPermissionState(): SmsPermissionState {
+    val context = LocalContext.current
+    val activity = remember(context) { context.findActivity() }
+    var isGranted by remember { mutableStateOf(context.hasSmsPermission()) }
+    var permanentlyDenied by rememberSaveable { mutableStateOf(false) }
+    var rationaleBeforeRequest by remember { mutableStateOf(false) }
+    fun shouldShowRationale() =
+        activity?.shouldShowRequestPermissionRationale(Manifest.permission.RECEIVE_SMS) == true
+
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        isGranted = granted
+        if (!granted && !shouldShowRationale()) {
+            if (rationaleBeforeRequest) {
+                // The user just chose "Don't allow" a second time; next tap goes to settings.
+                permanentlyDenied = true
+            } else {
+                // No dialog was shown at all: the permission is already permanently denied.
+                permanentlyDenied = true
+                context.openAppDetailsSettings()
+            }
+        }
+    }
+
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        isGranted = context.hasSmsPermission()
+        if (isGranted) permanentlyDenied = false
+    }
+
+    return SmsPermissionState(isGranted) {
+        if (permanentlyDenied) {
+            context.openAppDetailsSettings()
+        } else {
+            rationaleBeforeRequest = shouldShowRationale()
+            launcher.launch(Manifest.permission.RECEIVE_SMS)
+        }
+    }
+}
+
+private fun Context.hasSmsPermission(): Boolean =
+    ContextCompat.checkSelfPermission(this, Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED
+
+private fun Context.openAppDetailsSettings() {
+    startActivity(
+        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    )
+}
+
+// ─── Health panel ──────────────────────────────────────────────
 
 @Composable
 private fun ActivityHealthPanel(
-    hasSmsPermission: Boolean,
-    pendingCount: Int,
-    unparsedCount: Int,
-    failedCount: Int,
-    onNeedsAttention: () -> Unit,
-    onPermissionSettings: () -> Unit
+    lines: List<HealthLine>,
+    onRequestPermission: () -> Unit,
+    onReviewUnparsed: () -> Unit,
+    onShowFailed: () -> Unit
 ) {
-    val isError = !hasSmsPermission
-    val needsAttention = unparsedCount > 0
-    val containerColor = when {
-        isError -> MaterialTheme.colorScheme.errorContainer
-        needsAttention || failedCount > 0 -> MaterialTheme.colorScheme.tertiaryContainer
-        else -> MaterialTheme.colorScheme.primaryContainer
-    }
-    val contentColor = when {
-        isError -> MaterialTheme.colorScheme.onErrorContainer
-        needsAttention || failedCount > 0 -> MaterialTheme.colorScheme.onTertiaryContainer
-        else -> MaterialTheme.colorScheme.onPrimaryContainer
-    }
-    val title = when {
-        isError -> "SMS access is off"
-        needsAttention -> "$unparsedCount ${if (unparsedCount == 1) "message needs" else "messages need"} your help"
-        failedCount > 0 -> "$failedCount ${if (failedCount == 1) "transaction needs" else "transactions need"} retrying"
-        pendingCount > 0 -> "$pendingCount ${if (pendingCount == 1) "transaction is" else "transactions are"} waiting to sync"
-        else -> "Everything is up to date"
-    }
-    val message = when {
-        isError -> "Allow SMS access so FireSMS can receive bank messages."
-        needsAttention -> "Teach FireSMS how to understand these messages."
-        failedCount > 0 -> "Review the errors and retry after fixing your connection, rules, or settings."
-        pendingCount > 0 -> "FireSMS will retry automatically when your connection is available."
-        else -> "FireSMS is listening for matching bank messages."
+    val hasError = lines.any { it is HealthLine.PermissionOff }
+    val allGood = lines.singleOrNull() == HealthLine.AllGood
+    val (containerColor, contentColor) = when {
+        hasError -> MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.onErrorContainer
+        allGood -> FireSmsTheme.colors.successContainer to FireSmsTheme.colors.onSuccessContainer
+        else -> FireSmsTheme.colors.warningContainer to FireSmsTheme.colors.onWarningContainer
     }
 
     Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(
-                when {
-                    isError -> Modifier.clickable(onClick = onPermissionSettings)
-                    needsAttention -> Modifier.clickable(onClick = onNeedsAttention)
-                    else -> Modifier
-                }
-            ),
+        modifier = Modifier.fillMaxWidth(),
         color = containerColor,
         contentColor = contentColor,
         shape = MaterialTheme.shapes.large
     ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            if (isError || needsAttention || failedCount > 0) {
-                Icon(Icons.Default.Warning, contentDescription = null)
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.titleSmall)
-                Text(message, style = MaterialTheme.typography.bodySmall)
-            }
-            if (isError || needsAttention) {
-                Text(if (isError) "Settings" else "Review", style = MaterialTheme.typography.labelLarge)
+        Column {
+            lines.forEachIndexed { index, line ->
+                if (index > 0) HorizontalDivider(color = contentColor.copy(alpha = 0.12f))
+                val (onClick, actionLabel) = when (line) {
+                    HealthLine.PermissionOff -> onRequestPermission to "Allow"
+                    is HealthLine.Unparsed -> onReviewUnparsed to "Review"
+                    is HealthLine.Failed -> onShowFailed to "Show"
+                    is HealthLine.Queued, HealthLine.AllGood -> null to null
+                }
+                HealthPanelLine(
+                    icon = line.icon(),
+                    title = healthLineTitle(line),
+                    message = healthLineMessage(line),
+                    actionLabel = actionLabel,
+                    onClick = onClick
+                )
             }
         }
     }
 }
 
-private fun activityDateLabel(receivedAt: Long): String {
-    val date = Instant.ofEpochMilli(receivedAt).atZone(ZoneId.systemDefault()).toLocalDate()
-    val today = LocalDate.now()
-    return when (date) {
-        today -> "Today"
-        today.minusDays(1) -> "Yesterday"
-        else -> date.format(DateTimeFormatter.ofPattern("EEEE, MMM d", Locale.getDefault()))
+private fun HealthLine.icon(): ImageVector = when (this) {
+    HealthLine.PermissionOff -> Icons.Outlined.SmsFailed
+    is HealthLine.Unparsed -> Icons.AutoMirrored.Outlined.Rule
+    is HealthLine.Failed -> Icons.Outlined.ErrorOutline
+    is HealthLine.Queued -> Icons.Outlined.CloudSync
+    HealthLine.AllGood -> Icons.Outlined.CheckCircle
+}
+
+@Composable
+private fun HealthPanelLine(
+    icon: ImageVector,
+    title: String,
+    message: String,
+    actionLabel: String?,
+    onClick: (() -> Unit)?
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier)
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Icon(icon, contentDescription = null)
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            Text(message, style = MaterialTheme.typography.bodySmall)
+        }
+        if (actionLabel != null) {
+            Text(actionLabel, style = MaterialTheme.typography.labelLarge)
+        }
     }
 }
 
 @Composable
-private fun SmsLogCard(item: HomeTransactionItem, onClick: () -> Unit) {
-    val log = item.log
-    val transaction = item.transaction
-    val firstSplit = transaction?.transactions?.firstOrNull()
-    val color = statusColor(log.status, MaterialTheme.colorScheme)
-    val label = statusLabel(log.status)
-    val headline = transaction?.groupTitle?.takeIf { it.isNotBlank() }
-        ?: firstSplit?.description?.takeIf { it.isNotBlank() }
-        ?: log.sender
+private fun RetryAllButton(
+    counts: ActivityCounts,
+    isRetrying: Boolean,
+    progressText: String?,
+    onClick: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        OutlinedButton(
+            onClick = onClick,
+            enabled = !isRetrying,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Default.Refresh, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                when {
+                    progressText != null -> progressText
+                    isRetrying -> "Retry queued"
+                    counts.failed == 0 -> "Sync now (${counts.retryable})"
+                    counts.queued == 0 -> "Retry failed (${counts.retryable})"
+                    else -> "Retry now (${counts.retryable})"
+                }
+            )
+        }
+        if (isRetrying && progressText == null) {
+            Text(
+                "Retries start when your network preference allows.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
 
+@Composable
+private fun ActivitySearchField(query: String, onQueryChange: (String) -> Unit) {
+    OutlinedTextField(
+        value = query,
+        onValueChange = onQueryChange,
+        modifier = Modifier.fillMaxWidth(),
+        placeholder = { Text("Search description, sender or amount") },
+        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+        trailingIcon = {
+            if (query.isNotEmpty()) {
+                IconButton(onClick = { onQueryChange("") }) {
+                    Icon(Icons.Default.Close, contentDescription = "Clear search")
+                }
+            }
+        },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        shape = MaterialTheme.shapes.large
+    )
+}
+
+@Composable
+private fun ActivityEmptyState(hasAnyActivity: Boolean, filter: ActivityFilter, query: String, loadFailed: Boolean) {
+    val (icon, title, message) = when {
+        loadFailed -> Triple(Icons.Outlined.ErrorOutline, "Couldn't load activity", "Close and reopen FireSMS to try again.")
+        !hasAnyActivity -> Triple(
+            Icons.Outlined.Inbox,
+            "No activity yet",
+            "Transactions will appear here when FireSMS receives a matching bank message."
+        )
+        query.isNotEmpty() -> Triple(
+            Icons.Outlined.SearchOff,
+            "No matches",
+            "Nothing matches “$query”. Try a description, sender or amount."
+        )
+        filter == ActivityFilter.NEEDS_ATTENTION -> Triple(
+            Icons.Outlined.TaskAlt, "Nothing needs attention", "Every message has been read and synced."
+        )
+        filter == ActivityFilter.WAITING -> Triple(
+            Icons.Outlined.CloudDone, "Nothing waiting to sync", "Everything FireSMS read has reached Firefly."
+        )
+        filter == ActivityFilter.MODIFIED -> Triple(
+            Icons.Outlined.EditNote,
+            "No modified transactions",
+            "Transactions changed in Firefly after FireSMS created them appear here."
+        )
+        else -> Triple(Icons.Outlined.Inbox, "Nothing in this view", "Try another filter to see more activity.")
+    }
+    FireSmsEmptyState(title = title, message = message, icon = icon)
+}
+
+// ─── Activity card ─────────────────────────────────────────────
+
+@Composable
+private fun amountColor(direction: AmountDirection): Color =
+    if (direction == AmountDirection.IN) FireSmsTheme.colors.success else MaterialTheme.colorScheme.onSurface
+
+@Composable
+private fun SmsLogCard(row: ActivityRow, onClick: () -> Unit) {
     FireSmsListCard(
         onClick = onClick,
         headline = {
             Text(
-                headline,
+                row.headline,
                 style = MaterialTheme.typography.titleSmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -411,73 +566,64 @@ private fun SmsLogCard(item: HomeTransactionItem, onClick: () -> Unit) {
         },
         trailing = {
             Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (firstSplit != null) {
+                if (row.amount != null) {
                     Text(
-                        transaction.formattedTotal(),
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurface
+                        row.amount,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = amountColor(row.direction),
+                        modifier = Modifier.padding(start = 8.dp)
                     )
                 }
-                if (item.isModified || log.status != "success") {
+                if (row.isModified || row.status != "success") {
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        if (item.isModified) {
-                            FireSmsStatusPill(
-                                label = "Modified",
-                                color = MaterialTheme.colorScheme.secondary
-                            )
+                        if (row.isModified) {
+                            FireSmsStatusPill(label = "Modified", color = MaterialTheme.colorScheme.secondary)
                         }
-                        if (log.status != "success") {
-                            FireSmsStatusPill(label = label, color = color)
+                        if (row.status != "success") {
+                            FireSmsStatusPill(label = statusLabel(row.status), color = statusColor(row.status))
                         }
                     }
                 }
             }
         },
         supporting = {
-            if (firstSplit != null) {
-                val accountPath = listOfNotNull(
-                    firstSplit.sourceName?.takeIf { it.isNotBlank() },
-                    firstSplit.destinationName?.takeIf { it.isNotBlank() }
-                ).joinToString(" → ")
-                if (accountPath.isNotBlank()) {
-                    Text(
-                        accountPath,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                val metadata = listOfNotNull(
-                    firstSplit.type.takeIf { it.isNotBlank() }?.replaceFirstChar { it.uppercase() },
-                    SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(log.receivedAt)),
-                    firstSplit.categoryName?.takeIf { it.isNotBlank() },
-                    transaction.transactions.size.takeIf { it > 1 }?.let { "$it splits" }
-                ).joinToString(" · ")
-                if (metadata.isNotBlank()) {
-                    Text(
-                        metadata,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            } else {
+            if (row.accountPath != null) {
                 Text(
-                    log.body,
+                    row.accountPath,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (row.preview != null) {
+                Text(
+                    row.preview,
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            if (log.errorMessage != null) {
+            if (row.metadata.isNotBlank()) {
+                Text(
+                    row.metadata,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (row.errorMessage != null) {
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    log.errorMessage,
+                    row.errorMessage,
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.error,
+                    color = if (row.status == "queued") {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.error
+                    },
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -486,171 +632,194 @@ private fun SmsLogCard(item: HomeTransactionItem, onClick: () -> Unit) {
     )
 }
 
-@Composable
-private fun SmsLogDetailDialog(
-    item: HomeTransactionItem,
-    onDismiss: () -> Unit,
-    onEditTransaction: (Long) -> Unit,
-    onRetry: () -> Unit,
-    retryEnabled: Boolean,
-    onDelete: () -> Unit
-) {
-    val log = item.log
-    val transaction = item.transaction
-    val clipboard = LocalClipboard.current
-    val coroutineScope = rememberCoroutineScope()
-    val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-    val color = statusColor(log.status, MaterialTheme.colorScheme)
-    val label = statusLabel(log.status)
+// ─── Sample SMS dialog ─────────────────────────────────────────
 
-    var showDeleteConfirm by remember { mutableStateOf(false) }
+@Composable
+private fun SampleSmsDialog(onDismiss: () -> Unit, onProcess: (sender: String, body: String) -> Unit) {
+    var sender by rememberSaveable { mutableStateOf("") }
+    var body by rememberSaveable { mutableStateOf("") }
+    val canProcess = sender.isNotBlank() && body.isNotBlank()
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(if (transaction != null) "Transaction details" else "SMS details")
-                IconButton(onClick = { showDeleteConfirm = true }) {
-                    Icon(
-                        Icons.Default.Delete,
-                        contentDescription = "Delete",
-                        tint = MaterialTheme.colorScheme.error
-                    )
-                }
-            }
-        },
+        title = { Text("Process sample SMS") },
         text = {
-            Column(
-                modifier = Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                DetailRow("Status") {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        FireSmsStatusPill(label = label, color = color)
-                        if (log.canRetryFailedTransaction) {
-                            Spacer(Modifier.width(8.dp))
-                            OutlinedButton(
-                                onClick = onRetry,
-                                enabled = retryEnabled,
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                            ) {
-                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("Retry", style = MaterialTheme.typography.labelSmall)
-                            }
-                        }
-                    }
-                }
-                if (transaction != null) {
-                    DetailRow("Local record") {
-                        FireSmsStatusPill(
-                            label = if (item.isModified) "Modified" else "Original",
-                            color = if (item.isModified) {
-                                MaterialTheme.colorScheme.secondary
-                            } else {
-                                MaterialTheme.colorScheme.outline
-                            }
-                        )
-                    }
-                    transaction.groupTitle?.takeIf { it.isNotBlank() }?.let { title ->
-                        DetailRow("Group title") {
-                            Text(title, style = MaterialTheme.typography.bodyMedium)
-                        }
-                    }
-                    transaction.transactions.forEachIndexed { index, split ->
-                        TransactionSplitDetails(
-                            split = split,
-                            heading = if (transaction.transactions.size > 1) "Split ${index + 1}" else "Transaction"
-                        )
-                    }
-                }
-                DetailRow("Sender") {
-                    Text(log.sender, style = MaterialTheme.typography.bodyMedium)
-                }
-                DetailRow("Received") {
-                    Text(
-                        dateFormat.format(Date(log.receivedAt)),
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
-                if (log.processedAt != null) {
-                    DetailRow("Processed") {
-                        Text(
-                            dateFormat.format(Date(log.processedAt)),
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
-                if (log.fireflyId != null) {
-                    DetailRow("Firefly ID") {
-                        Text(log.fireflyId, style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-                DetailRow("Original SMS") {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            log.body,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        TextButton(
-                            onClick = {
-                                coroutineScope.launch {
-                                    clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("SMS", log.body)))
-                                }
-                            },
-                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
-                        ) {
-                            Text("Copy", style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-                }
-                if (log.errorMessage != null) {
-                    DetailRow("Error") {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                log.errorMessage,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            TextButton(
-                                onClick = {
-                                    coroutineScope.launch {
-                                        clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Error", log.errorMessage)))
-                                    }
-                                },
-                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
-                            ) {
-                                Text("Copy", style = MaterialTheme.typography.labelSmall)
-                            }
-                        }
-                    }
-                }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "FireSMS processes this message as if it had just arrived. If a rule matches, " +
+                        "it creates a real transaction in Firefly III.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                OutlinedTextField(
+                    value = sender,
+                    onValueChange = { sender = it },
+                    label = { Text("Sender") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = body,
+                    onValueChange = { body = it },
+                    label = { Text("Message") },
+                    minLines = 2,
+                    maxLines = 4,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         },
         confirmButton = {
-            if (log.fireflyId != null) {
-                Button(onClick = { onEditTransaction(log.id) }) {
-                    Text("Edit transaction")
-                }
-            }
+            TextButton(onClick = { onProcess(sender, body) }, enabled = canProcess) { Text("Process") }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Close") }
+            TextButton(onClick = onDismiss) { Text("Cancel") }
         }
     )
+}
+
+// ─── Detail sheet ──────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ActivityDetailSheet(
+    detail: ActivityDetail,
+    isRetrying: Boolean,
+    retryEnabled: Boolean,
+    snackbarHostState: SnackbarHostState,
+    onDismiss: () -> Unit,
+    onEditTransaction: () -> Unit,
+    onRetry: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val log = detail.log
+    val clipboard = LocalClipboard.current
+    val coroutineScope = rememberCoroutineScope()
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+
+    fun copy(label: String, text: String) {
+        coroutineScope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(label, text))) }
+    }
+
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Box {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                // Header
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    if (detail.amount != null) {
+                        Text(
+                            detail.amount,
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = amountColor(detail.direction)
+                        )
+                    }
+                    Text(detail.headline, style = MaterialTheme.typography.titleMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FireSmsStatusPill(label = statusLabel(log.status), color = statusColor(log.status))
+                        if (detail.isModified) {
+                            FireSmsStatusPill(label = "Modified", color = MaterialTheme.colorScheme.secondary)
+                        }
+                    }
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                Column(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    if (detail.isModified) {
+                        DetailItem(
+                            label = "Modified",
+                            value = "The Firefly transaction was changed after FireSMS created it."
+                        )
+                    }
+                    log.errorMessage?.takeIf { it.isNotBlank() }?.let { error ->
+                        DetailItem(
+                            label = if (log.status == "queued") "Why it's waiting" else "Error",
+                            value = error,
+                            valueColor = if (log.status == "queued") null else MaterialTheme.colorScheme.error,
+                            trailing = {
+                                IconButton(onClick = { copy("Error", error) }) {
+                                    Icon(Icons.Outlined.ContentCopy, contentDescription = "Copy error")
+                                }
+                            }
+                        )
+                    }
+                    detail.transaction?.groupTitle?.takeIf { it.isNotBlank() && detail.splits.size > 1 }?.let {
+                        DetailItem(label = "Group title", value = it)
+                    }
+                    detail.splits.forEachIndexed { index, split ->
+                        val s = split.split
+                        val lines = listOfNotNull(
+                            listOfNotNull(
+                                split.amount.takeIf { detail.splits.size > 1 },
+                                s.type.takeIf { it.isNotBlank() }?.replaceFirstChar { it.uppercase() }
+                            ).joinToString(" · ").takeIf { it.isNotBlank() },
+                            listOfNotNull(
+                                s.sourceName?.takeIf { it.isNotBlank() },
+                                s.destinationName?.takeIf { it.isNotBlank() }
+                            ).joinToString(" → ").takeIf { it.isNotBlank() },
+                            split.date,
+                            listOfNotNull(
+                                s.categoryName?.takeIf { it.isNotBlank() }?.let { "Category: $it" },
+                                s.budgetName?.takeIf { it.isNotBlank() }?.let { "Budget: $it" }
+                            ).joinToString(" · ").takeIf { it.isNotBlank() },
+                            s.notes?.takeIf { it.isNotBlank() }
+                        )
+                        DetailItem(
+                            label = if (detail.splits.size > 1) "Split ${index + 1}" else "Transaction",
+                            value = s.description.ifBlank { "Untitled transaction" },
+                            supporting = lines.joinToString("\n").takeIf { it.isNotBlank() }
+                        )
+                    }
+                    DetailItem(label = "Sender", value = log.sender)
+                    DetailItem(label = "Received", value = detail.received)
+                    detail.processed?.let { DetailItem(label = "Processed", value = it) }
+                    log.fireflyId?.let { DetailItem(label = "Firefly ID", value = it) }
+                    DetailItem(label = "Original SMS", value = log.body)
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    TextButton(
+                        onClick = { showDeleteConfirm = true },
+                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                    ) { Text("Delete") }
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = { copy("SMS", log.body) }) { Text("Copy") }
+                    if (detail.canRetry || isRetrying) {
+                        TextButton(onClick = onRetry, enabled = retryEnabled && !isRetrying) {
+                            if (isRetrying) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(Modifier.width(8.dp))
+                                Text("Retrying…")
+                            } else {
+                                Text("Retry")
+                            }
+                        }
+                    }
+                    if (log.fireflyId != null) {
+                        Button(onClick = onEditTransaction) { Text("Edit") }
+                    }
+                }
+            }
+            SnackbarHost(snackbarHostState, modifier = Modifier.align(Alignment.BottomCenter))
+        }
+    }
 
     if (showDeleteConfirm) {
         FireSmsConfirmDialog(
-            title = "Delete transaction log?",
-            message = "This removes the SMS log from FireSMS. It will not delete anything from Firefly III.",
+            title = "Delete from FireSMS?",
+            message = "This removes the SMS and its history from FireSMS. It will not delete anything from Firefly III.",
             confirmText = "Delete",
             onConfirm = {
                 showDeleteConfirm = false
@@ -662,73 +831,20 @@ private fun SmsLogDetailDialog(
 }
 
 @Composable
-private fun TransactionSplitDetails(split: StoredTransactionSplit, heading: String) {
-    DetailRow(heading) {
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                split.description.ifBlank { "Untitled transaction" },
-                style = MaterialTheme.typography.bodyMedium
-            )
-            val amountAndType = listOfNotNull(
-                split.amount.takeIf { it.isNotBlank() }?.let { split.formattedAmount(it) },
-                split.type.takeIf { it.isNotBlank() }?.replaceFirstChar { it.uppercase() }
-            ).joinToString(" · ")
-            if (amountAndType.isNotBlank()) {
-                Text(amountAndType, style = MaterialTheme.typography.bodySmall)
-            }
-            val accounts = listOfNotNull(
-                split.sourceName?.takeIf { it.isNotBlank() },
-                split.destinationName?.takeIf { it.isNotBlank() }
-            ).joinToString(" → ")
-            if (accounts.isNotBlank()) {
-                Text(accounts, style = MaterialTheme.typography.bodySmall)
-            }
-            if (split.date.isNotBlank()) {
-                Text(split.date, style = MaterialTheme.typography.bodySmall)
-            }
-            val labels = listOfNotNull(
-                split.categoryName?.takeIf { it.isNotBlank() }?.let { "Category: $it" },
-                split.budgetName?.takeIf { it.isNotBlank() }?.let { "Budget: $it" }
-            ).joinToString(" · ")
-            if (labels.isNotBlank()) {
-                Text(labels, style = MaterialTheme.typography.labelSmall)
-            }
-            split.notes?.takeIf { it.isNotBlank() }?.let { notes ->
-                Text(notes, style = MaterialTheme.typography.bodySmall)
-            }
-        }
-    }
-}
-
-private fun StoredTransactionSnapshot.formattedTotal(): String {
-    if (transactions.size == 1) {
-        val split = transactions.first()
-        return split.formattedAmount(split.amount)
-    }
-    val total = transactions.fold(BigDecimal.ZERO) { sum, split ->
-        sum + (split.amount.toBigDecimalOrNull() ?: BigDecimal.ZERO)
-    }.toPlainString()
-    return transactions.firstOrNull()?.formattedAmount(total) ?: total
-}
-
-private fun StoredTransactionSplit.formattedAmount(value: String): String {
-    val amount = formatDisplayAmount(value)
-    return when {
-        !currencySymbol.isNullOrBlank() -> "$currencySymbol$amount"
-        !currencyCode.isNullOrBlank() -> "$currencyCode $amount"
-        else -> amount
-    }
-}
-
-@Composable
-private fun DetailRow(label: String, content: @Composable () -> Unit) {
-    Column {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(Modifier.height(2.dp))
-        content()
-    }
+private fun DetailItem(
+    label: String,
+    value: String,
+    supporting: String? = null,
+    valueColor: Color? = null,
+    trailing: (@Composable () -> Unit)? = null
+) {
+    ListItem(
+        overlineContent = { Text(label) },
+        headlineContent = {
+            Text(value, color = valueColor ?: MaterialTheme.colorScheme.onSurface)
+        },
+        supportingContent = supporting?.let { { Text(it) } },
+        trailingContent = trailing,
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+    )
 }

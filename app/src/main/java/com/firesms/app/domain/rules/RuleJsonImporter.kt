@@ -42,6 +42,9 @@ private data class RuleJsonPayload(
 
 object RuleJsonImporter {
 
+    private val JSON_ESCAPES = setOf('"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u')
+    private val ERROR_OFFSET = Regex("""offset (\d+)""")
+
     fun parse(input: String): RuleJsonImportResult {
         val normalized = stripMarkdownFence(input)
         if (normalized.isBlank()) {
@@ -52,8 +55,11 @@ object RuleJsonImporter {
         val payload = try {
             decodePayload(repairedInput.value)
         } catch (e: SerializationException) {
+            val offset = repairedInput.originalOffset(jsonErrorOffset(e.message))
+            val where = offset?.let { " at ${describePosition(input, normalized, it)}" }.orEmpty()
+            val detail = jsonErrorDetail(e.message)?.let { " ($it)" }.orEmpty()
             return RuleJsonImportResult.Error(
-                "Invalid rule JSON. Check that all required fields are present and properly escaped."
+                "Invalid rule JSON$where$detail. Check for missing quotes, commas or braces."
             )
         } catch (e: Exception) {
             return RuleJsonImportResult.Error("Invalid rule JSON: ${e.message ?: "unable to read input"}")
@@ -97,11 +103,11 @@ object RuleJsonImporter {
 
         fun requiredString(name: String): String {
             val value = jsonObject[name]
-                ?: throw IllegalArgumentException("Missing required field: $name")
+                ?: throw IllegalArgumentException("${fieldName(name)} is missing.")
             return (value as? JsonPrimitive)
                 ?.takeIf { it.isString }
                 ?.content
-                ?: throw IllegalArgumentException("$name must be a JSON string.")
+                ?: throw IllegalArgumentException("${fieldName(name)} must be text in quotes.")
         }
 
         fun optionalString(name: String): String? {
@@ -110,7 +116,7 @@ object RuleJsonImporter {
             return (value as? JsonPrimitive)
                 ?.takeIf { it.isString }
                 ?.content
-                ?: throw IllegalArgumentException("$name must be a JSON string or null.")
+                ?: throw IllegalArgumentException("${fieldName(name)} must be text in quotes, or null.")
         }
 
         return RuleJsonPayload(
@@ -126,10 +132,49 @@ object RuleJsonImporter {
         )
     }
 
+    /** The editor label with the JSON key, e.g. `Amount template ("amountTemplate")`. */
+    private fun fieldName(key: String): String = "${RuleValidator.labelFor(key)} (\"$key\")"
+
+    private fun jsonErrorOffset(message: String?): Int? =
+        message?.let { ERROR_OFFSET.find(it) }?.groupValues?.get(1)?.toIntOrNull()
+
+    /** The parser's own explanation, without its offset prefix, JSON path and echoed input. */
+    private fun jsonErrorDetail(message: String?): String? {
+        val text = message ?: return null
+        val afterOffset = ERROR_OFFSET.find(text)?.let { text.substring(it.range.last + 1).removePrefix(":") } ?: text
+        return afterOffset
+            .substringBefore('\n')
+            .substringBefore(" at path")
+            .trim()
+            .trimEnd('.')
+            .ifBlank { null }
+    }
+
+    /**
+     * `line 2, column 5, near "…"` for an [offset] into [normalized], counted in [input] as the
+     * user pasted it, including any surrounding code fence.
+     */
+    internal fun describePosition(input: String, normalized: String, offset: Int): String {
+        val base = input.indexOf(normalized).coerceAtLeast(0)
+        val position = (base + offset).coerceIn(0, input.length)
+        val before = input.substring(0, position)
+        val line = before.count { it == '\n' } + 1
+        val column = position - (before.lastIndexOf('\n') + 1) + 1
+        val near = input.substring(position, (position + 12).coerceAtMost(input.length))
+            .substringBefore('\n')
+        return if (near.isBlank()) "line $line, column $column (end of input)"
+        else "line $line, column $column, near \"$near\""
+    }
+
     private data class RepairedJsonInput(
         val value: String,
-        val repaired: Boolean
-    )
+        val repaired: Boolean,
+        /** Offsets in [value] of the backslashes added by the repair. */
+        val insertedAt: List<Int> = emptyList()
+    ) {
+        /** Maps an offset in [value] back to the input before the repair. */
+        fun originalOffset(offset: Int?): Int? = offset?.let { o -> o - insertedAt.count { it < o } }
+    }
 
     /**
      * LLMs commonly emit regex escapes such as \s in otherwise valid JSON. JSON only accepts
@@ -140,6 +185,7 @@ object RuleJsonImporter {
         val output = StringBuilder(input.length)
         var insideString = false
         var repaired = false
+        val insertedAt = mutableListOf<Int>()
         var index = 0
 
         while (index < input.length) {
@@ -165,9 +211,10 @@ object RuleJsonImporter {
                     }
 
                     val escaped = input[index + 1]
-                    if (escaped in setOf('"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u')) {
+                    if (escaped in JSON_ESCAPES) {
                         output.append(char).append(escaped)
                     } else {
+                        insertedAt += output.length
                         output.append("\\\\").append(escaped)
                         repaired = true
                     }
@@ -180,7 +227,7 @@ object RuleJsonImporter {
             }
         }
 
-        return RepairedJsonInput(output.toString(), repaired)
+        return RepairedJsonInput(output.toString(), repaired, insertedAt)
     }
 
     private fun stripMarkdownFence(input: String): String {

@@ -22,6 +22,12 @@ class FailedTransactionRetryTest {
     }
 
     @Test
+    fun `queued transactions can be retried before their automatic retry is due`() {
+        assertTrue(log("queued").canRetryFailedTransaction)
+        assertFalse(log("queued", "42").canRetryFailedTransaction)
+    }
+
+    @Test
     fun `synced transactions are never retryable even without a cached ID`() {
         assertFalse(log("success", "42").canRetryFailedTransaction)
         assertFalse(log("success").canRetryFailedTransaction)

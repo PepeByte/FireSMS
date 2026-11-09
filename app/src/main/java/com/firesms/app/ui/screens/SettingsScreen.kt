@@ -1,32 +1,35 @@
 package com.firesms.app.ui.screens
 
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.Manifest
-import android.content.pm.PackageManager
 import android.os.Build
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.firesms.app.BuildConfig
 import com.firesms.app.data.local.HistoryRetention
+import com.firesms.app.data.remote.normalizeFireflyUrl
 import com.firesms.app.ui.components.FireSmsBottomBar
+import com.firesms.app.ui.components.FireSmsConfirmDialog
 import com.firesms.app.ui.components.FireSmsPreferenceOption
 import com.firesms.app.ui.components.FireSmsResultBanner
 import com.firesms.app.ui.components.FireSmsScaffold
 import com.firesms.app.ui.components.FireSmsScreen
 import com.firesms.app.ui.components.FireSmsSection
-import com.firesms.app.ui.components.FireSmsStatusPill
 import com.firesms.app.ui.components.FireSmsTopLevelDestination
 import com.firesms.app.ui.viewmodels.SettingsViewModel
+import com.firesms.app.ui.viewmodels.retentionDeletesMoreHistory
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -39,57 +42,63 @@ fun SettingsScreen(
     onNavigateToAutomation: () -> Unit,
     viewModel: SettingsViewModel = viewModel()
 ) {
-    val url by viewModel.fireflyUrl.collectAsState()
-    val token by viewModel.fireflyToken.collectAsState()
-    val syncNetworkPolicy by viewModel.syncNetworkPolicy.collectAsState()
-    val historyRetention by viewModel.historyRetention.collectAsState()
-    val dataTransferState by viewModel.dataTransferState.collectAsState()
-    val testResult by viewModel.testResult.collectAsState()
-    val isTesting by viewModel.isTesting.collectAsState()
-    val context = LocalContext.current
+    val url by viewModel.fireflyUrl.collectAsStateWithLifecycle()
+    val token by viewModel.fireflyToken.collectAsStateWithLifecycle()
+    val syncNetworkPolicy by viewModel.syncNetworkPolicy.collectAsStateWithLifecycle()
+    val historyRetention by viewModel.historyRetention.collectAsStateWithLifecycle()
+    val dynamicColor by viewModel.dynamicColor.collectAsStateWithLifecycle()
+    val dataTransferState by viewModel.dataTransferState.collectAsStateWithLifecycle()
+    val testResult by viewModel.testResult.collectAsStateWithLifecycle()
+    val isTesting by viewModel.isTesting.collectAsStateWithLifecycle()
     val uriHandler = LocalUriHandler.current
-    val updateSnapshot by viewModel.updateSnapshot.collectAsState()
-    val updateCheckState by viewModel.updateCheckState.collectAsState()
-    val updatePreferenceError by viewModel.updatePreferenceError.collectAsState()
+    val updateSnapshot by viewModel.updateSnapshot.collectAsStateWithLifecycle()
+    val updateCheckState by viewModel.updateCheckState.collectAsStateWithLifecycle()
+    val updatePreferenceError by viewModel.updatePreferenceError.collectAsStateWithLifecycle()
     val coroutineScope = rememberCoroutineScope()
 
     var urlInput by remember { mutableStateOf(url) }
     var tokenInput by remember { mutableStateOf(token) }
     val snackbarHostState = remember { SnackbarHostState() }
     var syncSaveCount by remember { mutableIntStateOf(0) }
-    var connectionSaveCount by remember { mutableIntStateOf(0) }
     var retentionMenuExpanded by remember { mutableStateOf(false) }
+    var pendingRetention by remember { mutableStateOf<HistoryRetention?>(null) }
     var pendingImportUri by remember { mutableStateOf<android.net.Uri?>(null) }
     LaunchedEffect(url, token) {
         urlInput = url
         tokenInput = token
     }
 
-    val smsPermissionStatus = ContextCompat.checkSelfPermission(
-        context,
-        Manifest.permission.RECEIVE_SMS
-    )
-    var smsPermissionGranted by remember(smsPermissionStatus) {
-        mutableStateOf(smsPermissionStatus == PackageManager.PERMISSION_GRANTED)
+    // ─── Unsaved connection edits ──────────────────────────────
+    // Settings is a top-level tab, so leaving happens through the bottom bar as well as back.
+    val connectionDirty = normalizeFireflyUrl(urlInput) != normalizeFireflyUrl(url) ||
+        tokenInput.trim() != token.trim()
+    var pendingLeave by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var backAfterDiscard by remember { mutableStateOf(false) }
+    val backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
+    val leaveSettings: (() -> Unit) -> Unit = { action ->
+        if (connectionDirty) pendingLeave = action else action()
     }
-
-    val notificationPermissionStatus = remember {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            PackageManager.PERMISSION_GRANTED
+    BackHandler(enabled = connectionDirty) { pendingLeave = { backAfterDiscard = true } }
+    // Re-dispatch back only once the discarded edits have disabled the handler above.
+    LaunchedEffect(backAfterDiscard, connectionDirty) {
+        if (backAfterDiscard && !connectionDirty) {
+            backAfterDiscard = false
+            backDispatcher?.onBackPressed()
         }
     }
-    var notificationPermissionGranted by remember(notificationPermissionStatus) {
-        mutableStateOf(notificationPermissionStatus == PackageManager.PERMISSION_GRANTED)
-    }
+
+    val smsPermission = rememberTrackedPermission(Manifest.permission.RECEIVE_SMS)
+    val notificationPermission = rememberTrackedPermission(
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) Manifest.permission.POST_NOTIFICATIONS else null
+    )
+    val battery = rememberBatteryOptimizationState()
 
     val smsPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { granted -> smsPermissionGranted = granted }
+    ) { granted -> smsPermission.onRequestResult(granted) }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { granted -> notificationPermissionGranted = granted }
+    ) { granted -> notificationPermission.onRequestResult(granted) }
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
@@ -101,14 +110,20 @@ fun SettingsScreen(
         pendingImportUri = uri
     }
 
+    LaunchedEffect(viewModel) {
+        viewModel.connectionSaved.collect {
+            snackbarHostState.showSnackbar("Connection settings saved")
+        }
+    }
+
     FireSmsScaffold(
         title = "Settings",
         snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
             FireSmsBottomBar(
                 selected = FireSmsTopLevelDestination.SETTINGS,
-                onActivity = onNavigateToActivity,
-                onAutomation = onNavigateToAutomation,
+                onActivity = { leaveSettings(onNavigateToActivity) },
+                onAutomation = { leaveSettings(onNavigateToAutomation) },
                 onSettings = {}
             )
         }
@@ -116,7 +131,88 @@ fun SettingsScreen(
         FireSmsScreen(
             modifier = Modifier.padding(padding)
         ) {
-            // Sync preference section — auto-saves on selection
+            FireSmsSection(
+                title = "Firefly III connection",
+                subtitle = "Server address and access token used to create transactions"
+            ) {
+                FireflyConnectionFields(
+                    url = urlInput,
+                    onUrlChange = {
+                        urlInput = it
+                        viewModel.clearTestResult()
+                    },
+                    token = tokenInput,
+                    onTokenChange = {
+                        tokenInput = it
+                        viewModel.clearTestResult()
+                    },
+                    onDone = {}
+                )
+
+                val canSubmit = urlInput.isNotBlank() && tokenInput.isNotBlank() && !isTesting
+                Button(
+                    onClick = {
+                        if (connectionDirty) {
+                            viewModel.saveAndTestConnection(urlInput, tokenInput)
+                        } else {
+                            viewModel.testConnection(urlInput, tokenInput)
+                        }
+                    },
+                    enabled = canSubmit,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        when {
+                            isTesting -> "Testing…"
+                            connectionDirty -> "Save and test"
+                            else -> "Test connection"
+                        }
+                    )
+                }
+                if (connectionDirty) {
+                    Text(
+                        "Changes aren't saved until you tap Save and test.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                when (val result = testResult) {
+                    is SettingsViewModel.TestResult.Success -> {
+                        FireSmsResultBanner(text = "Connected to Firefly III.", isError = false)
+                    }
+                    is SettingsViewModel.TestResult.Failure -> {
+                        FireSmsResultBanner(text = "Connection failed: ${result.message}", isError = true)
+                    }
+                    null -> {}
+                }
+            }
+
+            FireSmsSection(
+                title = "Permissions",
+                subtitle = "What FireSMS is allowed to do on this phone"
+            ) {
+                SetupCard {
+                    PermissionStatusRow(
+                        title = "SMS access",
+                        description = "Required to recognise bank messages.",
+                        permission = smsPermission,
+                        required = true,
+                        onRequest = { smsPermissionLauncher.launch(Manifest.permission.RECEIVE_SMS) }
+                    )
+                    PermissionStatusRow(
+                        title = "Notifications",
+                        description = "Tells you when a transaction is added, fails, or an update is available.",
+                        permission = notificationPermission,
+                        required = false,
+                        onRequest = notificationPermission.permission?.let { permission ->
+                            { notificationPermissionLauncher.launch(permission) }
+                        }
+                    )
+                    BatteryStatusRow(battery)
+                }
+            }
+
             FireSmsSection(
                 title = "Sync preference",
                 subtitle = "When to sync queued transactions"
@@ -147,7 +243,8 @@ fun SettingsScreen(
 
             FireSmsSection(
                 title = "History",
-                subtitle = "Automatically remove old local activity. Firefly III transactions and active queued retries are kept."
+                subtitle = "Automatically delete local activity older than the chosen period, including " +
+                    "unsynced and unparsed messages. Transactions already in Firefly III are not affected."
             ) {
                 ExposedDropdownMenuBox(
                     expanded = retentionMenuExpanded,
@@ -183,10 +280,43 @@ fun SettingsScreen(
                                 },
                                 onClick = {
                                     retentionMenuExpanded = false
-                                    viewModel.saveHistoryRetention(option.value)
+                                    when {
+                                        option == selected -> Unit
+                                        // Shortening deletes history right away, so ask first.
+                                        retentionDeletesMoreHistory(selected, option) -> pendingRetention = option
+                                        else -> viewModel.saveHistoryRetention(option.value)
+                                    }
                                 }
                             )
                         }
+                    }
+                }
+            }
+
+            // Material You colours exist only on Android 12+.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                FireSmsSection(title = "Appearance") {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .toggleable(
+                                value = dynamicColor,
+                                onValueChange = viewModel::setDynamicColor,
+                                role = Role.Switch
+                            ),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Use wallpaper colours", style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                "Match FireSMS to your wallpaper instead of the FireSMS blue.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        // The row is the toggle target, so the switch itself isn't separately focusable.
+                        Switch(checked = dynamicColor, onCheckedChange = null)
                     }
                 }
             }
@@ -239,104 +369,6 @@ fun SettingsScreen(
                         FireSmsResultBanner(text = state.message, isError = true)
                     }
                     null -> Unit
-                }
-            }
-
-            // Firefly connection section — saved separately
-            FireSmsSection(
-                title = "Firefly III connection",
-                subtitle = "Saved separately from sync preference."
-            ) {
-                OutlinedTextField(
-                    value = urlInput,
-                    onValueChange = {
-                        urlInput = it
-                        viewModel.clearTestResult()
-                    },
-                    label = { Text("Server URL") },
-                    placeholder = { Text("https://firefly.example.com") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                OutlinedTextField(
-                    value = tokenInput,
-                    onValueChange = {
-                        tokenInput = it
-                        viewModel.clearTestResult()
-                    },
-                    label = { Text("Personal access token") },
-                    visualTransformation = PasswordVisualTransformation(),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = {
-                            viewModel.saveSettings(urlInput, tokenInput)
-                            connectionSaveCount++
-                        },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Save connection")
-                    }
-                    OutlinedButton(
-                        onClick = { viewModel.testConnection(urlInput, tokenInput) },
-                        modifier = Modifier.weight(1f),
-                        enabled = urlInput.isNotBlank() && tokenInput.isNotBlank() && !isTesting
-                    ) {
-                        Text(if (isTesting) "Testing…" else "Test connection")
-                    }
-                }
-
-                when (val result = testResult) {
-                    is SettingsViewModel.TestResult.Success -> {
-                        FireSmsResultBanner(
-                            text = "Connection successful!",
-                            isError = false
-                        )
-                    }
-                    is SettingsViewModel.TestResult.Failure -> {
-                        FireSmsResultBanner(
-                            text = "Connection failed: ${result.message}",
-                            isError = true
-                        )
-                    }
-                    null -> {}
-                }
-            }
-
-            // Permissions
-            FireSmsSection(title = "Permissions") {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("SMS receive permission")
-                    if (smsPermissionGranted) {
-                        FireSmsStatusPill(label = "Granted", color = MaterialTheme.colorScheme.primary)
-                    } else {
-                        Button(onClick = { smsPermissionLauncher.launch(Manifest.permission.RECEIVE_SMS) }) {
-                            Text("Request")
-                        }
-                    }
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Notification permission")
-                    if (notificationPermissionGranted) {
-                        FireSmsStatusPill(label = "Granted", color = MaterialTheme.colorScheme.primary)
-                    } else {
-                        Button(onClick = { notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }) {
-                            Text("Request")
-                        }
-                    }
                 }
             }
 
@@ -436,26 +468,47 @@ fun SettingsScreen(
         }
     }
 
+    pendingLeave?.let { action ->
+        FireSmsConfirmDialog(
+            title = "Discard connection changes?",
+            message = "Your server address and access token edits haven't been saved.",
+            confirmText = "Discard",
+            dismissText = "Keep editing",
+            onConfirm = {
+                pendingLeave = null
+                urlInput = url
+                tokenInput = token
+                viewModel.clearTestResult()
+                action()
+            },
+            onDismiss = { pendingLeave = null }
+        )
+    }
+
+    pendingRetention?.let { option ->
+        FireSmsConfirmDialog(
+            title = "Keep history for ${option.label}?",
+            message = "Older history will be deleted now. Unsynced and unparsed messages are also removed.",
+            confirmText = "Delete older history",
+            onConfirm = {
+                pendingRetention = null
+                viewModel.saveHistoryRetention(option.value)
+            },
+            onDismiss = { pendingRetention = null }
+        )
+    }
+
     pendingImportUri?.let { uri ->
-        AlertDialog(
-            onDismissRequest = { pendingImportUri = null },
-            title = { Text("Restore FireSMS backup?") },
-            text = {
-                Text(
-                    "This replaces all current local history, queued retries, parser rules, title mappings, and settings. It does not change transactions already stored in Firefly III."
-                )
+        FireSmsConfirmDialog(
+            title = "Restore FireSMS backup?",
+            message = "This replaces all local history, queued retries, parser rules, title mappings, and " +
+                "settings, including your Firefly connection. Transactions already in Firefly III are not changed.",
+            confirmText = "Replace and restore",
+            onConfirm = {
+                pendingImportUri = null
+                viewModel.importData(uri)
             },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        pendingImportUri = null
-                        viewModel.importData(uri)
-                    }
-                ) { Text("Replace and restore") }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingImportUri = null }) { Text("Cancel") }
-            }
+            onDismiss = { pendingImportUri = null }
         )
     }
 
@@ -463,13 +516,6 @@ fun SettingsScreen(
     LaunchedEffect(syncSaveCount) {
         if (syncSaveCount > 0) {
             snackbarHostState.showSnackbar("Sync preference saved")
-        }
-    }
-
-    // Connection save triggers snackbar
-    LaunchedEffect(connectionSaveCount) {
-        if (connectionSaveCount > 0) {
-            snackbarHostState.showSnackbar("Connection settings saved")
         }
     }
 }

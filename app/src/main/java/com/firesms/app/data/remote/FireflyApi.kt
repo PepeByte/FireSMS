@@ -261,9 +261,31 @@ class FireflyApi(private val token: String) {
     suspend fun testConnection(baseUrl: String): Boolean {
         val url = apiUrl(baseUrl, "about")
         val response = client.get(url) { authorize() }
-        return response.status.isSuccess() &&
-            response.request.url.encodedPath.contains("/api/") &&
-            response.contentType()?.match(ContentType.Application.Json) == true
+        return classifyConnectionResponse(
+            statusCode = response.status.value,
+            contentType = response.contentType()?.withoutParameters()?.toString(),
+            finalPath = response.request.url.encodedPath
+        ) == ConnectionCheckResult.Success
+    }
+
+    /**
+     * Like [testConnection], but explains what went wrong instead of throwing or answering false,
+     * so Settings and onboarding can tell a rejected token from a wrong address.
+     */
+    suspend fun checkConnection(baseUrl: String): ConnectionCheckResult {
+        return try {
+            val response = client.get(apiUrl(baseUrl, "about")) { authorize() }
+            classifyConnectionResponse(
+                statusCode = response.status.value,
+                contentType = response.contentType()?.withoutParameters()?.toString(),
+                finalPath = response.request.url.encodedPath
+            )
+        } catch (e: CancellationException) {
+            // A Ktor request timeout is a CancellationException; it must not be swallowed as one.
+            if (e.isRequestTimeout()) classifyConnectionError(e) else throw e
+        } catch (e: Exception) {
+            classifyConnectionError(e)
+        }
     }
 
     suspend fun createTransactionRaw(
@@ -482,16 +504,118 @@ class FireflyApi(private val token: String) {
  * with errors that never mentioned the URL.
  */
 internal fun apiUrl(baseUrl: String, path: String): String {
-    var base = baseUrl.trim().trimEnd('/')
-    if (!base.startsWith("http://", ignoreCase = true) &&
-        !base.startsWith("https://", ignoreCase = true)
-    ) {
-        base = "http://$base"
-    }
+    var base = normalizeFireflyUrl(baseUrl)
     if (base.endsWith("/api/v1", ignoreCase = true)) base = base.dropLast(7)
     else if (base.endsWith("/api", ignoreCase = true)) base = base.dropLast(4)
     return "$base/api/v1/${path.trimStart('/')}"
 }
+
+/** Whether [url] names its scheme, e.g. `https://`. */
+fun hasUrlScheme(url: String): Boolean {
+    val text = url.trim()
+    return text.startsWith("http://", ignoreCase = true) || text.startsWith("https://", ignoreCase = true)
+}
+
+/**
+ * The form a server address is stored in: trimmed, without trailing slashes, and with an explicit
+ * scheme. An address typed without one gets `https://`, so the access token is never sent in the
+ * clear unless the user asked for `http://`. Blank stays blank.
+ */
+fun normalizeFireflyUrl(input: String): String {
+    val text = input.trim().trimEnd('/')
+    if (text.isEmpty()) return ""
+    return if (hasUrlScheme(text)) text else "https://$text"
+}
+
+/** True when [url] (as typed or stored) would send the access token over plain HTTP. */
+fun isCleartextUrl(url: String): Boolean =
+    normalizeFireflyUrl(url).startsWith("http://", ignoreCase = true)
+
+/** Outcome of a connection test, worded for the user. */
+sealed interface ConnectionCheckResult {
+    data object Success : ConnectionCheckResult
+    data class Failure(val message: String) : ConnectionCheckResult
+}
+
+internal const val MESSAGE_TOKEN_REJECTED =
+    "Access token was rejected. Check that it was copied completely and hasn't been revoked."
+internal const val MESSAGE_API_NOT_FOUND = "Firefly API not found at this URL — check the address."
+internal const val MESSAGE_WEB_PAGE =
+    "This URL returned a web page, not the Firefly API (login page or proxy?)."
+internal const val MESSAGE_UNREACHABLE =
+    "Couldn't reach the server. Check the address, the port, your connection, and that Firefly III is running."
+internal const val MESSAGE_TIMEOUT =
+    "Couldn't reach the server: it took too long to answer. Check that Firefly III is running and responsive."
+internal const val MESSAGE_CERTIFICATE =
+    "The server's certificate isn't trusted on this device. Install its certificate authority, " +
+        "or use a certificate Android already trusts."
+internal const val MESSAGE_NOT_HTTPS =
+    "The server didn't answer over https. If it's only on your home network, enter the address with http://."
+
+/**
+ * Maps the answer to `GET /api/v1/about` to a result. Pure so it can be unit tested.
+ *
+ * Firefly answers an unauthenticated browser-style request with a redirect to /login, and the
+ * client follows redirects, so a 200 alone proves nothing: a real API answer is JSON and stays
+ * under `/api/`. Firefly may be installed under a subpath, so only the `/api/` segment matters.
+ */
+fun classifyConnectionResponse(
+    statusCode: Int,
+    contentType: String?,
+    finalPath: String
+): ConnectionCheckResult {
+    val type = contentType?.substringBefore(';')?.trim()?.lowercase().orEmpty()
+    val isHtml = type == "text/html" || type == "application/xhtml+xml"
+    val isJson = type == "application/json" || type.endsWith("+json")
+    return when {
+        statusCode == 401 || statusCode == 403 -> ConnectionCheckResult.Failure(MESSAGE_TOKEN_REJECTED)
+        statusCode == 404 -> ConnectionCheckResult.Failure(MESSAGE_API_NOT_FOUND)
+        statusCode in 200..299 && isJson && finalPath.contains("/api/") -> ConnectionCheckResult.Success
+        isHtml || (statusCode in 200..299 && !finalPath.contains("/api/")) ->
+            ConnectionCheckResult.Failure(MESSAGE_WEB_PAGE)
+        statusCode in 500..599 -> ConnectionCheckResult.Failure(
+            "The server had a problem (HTTP $statusCode). Check that Firefly III is running, then try again."
+        )
+        statusCode in 200..299 -> ConnectionCheckResult.Failure(
+            "The server answered, but not like the Firefly API. Check the address."
+        )
+        else -> ConnectionCheckResult.Failure(
+            "The server refused the request (HTTP $statusCode). Check the address and access token."
+        )
+    }
+}
+
+/** Maps a transport failure during a connection test to a result. Pure so it can be unit tested. */
+fun classifyConnectionError(error: Throwable): ConnectionCheckResult {
+    val chain = generateSequence(error) { it.cause }.toList()
+    fun causedBy(vararg simpleNames: String) =
+        chain.any { cause -> simpleNames.any { cause.javaClass.simpleName == it } }
+    val messages = chain.mapNotNull { it.message }.joinToString(" ")
+    return ConnectionCheckResult.Failure(
+        when {
+            // OkHttp's message when https is spoken to a plain-http port.
+            causedBy("SSLException", "SSLProtocolException") &&
+                messages.contains("plaintext", ignoreCase = true) -> MESSAGE_NOT_HTTPS
+            causedBy(
+                "SSLHandshakeException", "SSLPeerUnverifiedException",
+                "CertPathValidatorException", "CertificateException", "CertificateExpiredException",
+                "CertificateNotYetValidException", "SSLException"
+            ) -> MESSAGE_CERTIFICATE
+            causedBy(
+                "SocketTimeoutException", "HttpRequestTimeoutException",
+                "ConnectTimeoutException", "TimeoutCancellationException"
+            ) -> MESSAGE_TIMEOUT
+            causedBy(
+                "UnknownHostException", "ConnectException", "NoRouteToHostException",
+                "PortUnreachableException", "UnresolvedAddressException"
+            ) -> MESSAGE_UNREACHABLE
+            else -> networkErrorMessage(error)
+        }
+    )
+}
+
+private fun Throwable.isRequestTimeout(): Boolean =
+    generateSequence(this) { it.cause }.any { it.javaClass.simpleName == "HttpRequestTimeoutException" }
 
 /**
  * Finds the transaction group in [candidates] that already holds [body].
@@ -561,7 +685,7 @@ fun networkErrorMessage(error: Throwable): String {
             "The server URL or access token contains spaces or line breaks. Re-enter both without " +
                 "extra whitespace."
         causedBy("IllegalArgumentException") && detail.contains("URL", ignoreCase = true) ->
-            "That server address isn't a valid URL. Include http:// or https://."
+            "That server address isn't a valid URL. Check it for typos."
         else -> detail.ifBlank { error.javaClass.simpleName }
     }
 }

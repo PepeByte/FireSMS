@@ -156,6 +156,35 @@ class RuleJsonImporterTest {
     }
 
     @Test
+    fun `malformed JSON errors give the line and column`() {
+        val input = "{\n  \"bodyPattern\": \"(?<amount>\\d+)\"\n  \"amountTemplate\": \"{{amount}}\"\n}"
+        val result = assertIs<RuleJsonImportResult.Error>(RuleJsonImporter.parse(input))
+        assertTrue(result.message.contains("line 3"), result.message)
+        assertTrue(result.message.contains("column"), result.message)
+
+        // Repaired escapes and a code fence do not shift the reported position.
+        val fenced = "```json\n{\"bodyPattern\": \"\\s(?<amount>\\d+)\" oops}\n```"
+        val fencedResult = assertIs<RuleJsonImportResult.Error>(RuleJsonImporter.parse(fenced))
+        assertTrue(fencedResult.message.contains("line 2, column 37"), fencedResult.message)
+    }
+
+    @Test
+    fun `missing fields are named with the editor label`() {
+        val result = assertIs<RuleJsonImportResult.Error>(
+            RuleJsonImporter.parse("""{"bodyPattern":"(?<amount>\\d+)"}""")
+        )
+        assertTrue(result.message.contains("Amount template (\"amountTemplate\") is missing"), result.message)
+    }
+
+    @Test
+    fun `invalid regex errors explain the problem and its position`() {
+        val result = assertIs<RuleJsonImportResult.Error>(
+            RuleJsonImporter.parse(validJson(bodyPattern = "(?<amount>\\d+"))
+        )
+        assertTrue(result.message.contains("at character"), result.message)
+    }
+
+    @Test
     fun `rejects missing required fields`() {
         val result = assertIs<RuleJsonImportResult.Error>(
             RuleJsonImporter.parse("""{"bodyPattern":"(?<amount>\\d+)"}""")
@@ -168,7 +197,7 @@ class RuleJsonImporterTest {
         val result = assertIs<RuleJsonImportResult.Error>(
             RuleJsonImporter.parse(validJson(bodyPattern = "[invalid"))
         )
-        assertTrue(result.message.contains("regular expression"))
+        assertTrue(result.message.contains("Body pattern isn't a valid pattern"), result.message)
     }
 
     @Test
@@ -181,7 +210,7 @@ class RuleJsonImporterTest {
                 )
             )
         )
-        assertTrue(result.message.contains("missing from bodyPattern"))
+        assertTrue(result.message.contains("Body pattern doesn't capture"), result.message)
     }
 
     @Test
@@ -194,7 +223,7 @@ class RuleJsonImporterTest {
                 )
             )
         )
-        assertTrue(result.message.contains("datePattern and dateFormat"))
+        assertTrue(result.message.contains("Date pattern and Date format"))
     }
 
     @Test
@@ -207,7 +236,7 @@ class RuleJsonImporterTest {
                 )
             )
         )
-        assertTrue(result.message.contains("remarksPattern"))
+        assertTrue(result.message.contains("Remarks pattern"))
     }
 
     @Test
@@ -215,12 +244,12 @@ class RuleJsonImporterTest {
         val badSource = assertIs<RuleJsonImportResult.Error>(
             RuleJsonImporter.parse(validJson(descriptionSource = "group"))
         )
-        assertTrue(badSource.message.contains("descriptionSource"))
+        assertTrue(badSource.message.contains("Description source"))
 
         val badType = assertIs<RuleJsonImportResult.Error>(
             RuleJsonImporter.parse(validJson(type = "payment"))
         )
-        assertTrue(badType.message.contains("type must be"))
+        assertTrue(badType.message.contains("Transaction type must be"))
     }
 
     private fun validJson(

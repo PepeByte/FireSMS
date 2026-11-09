@@ -4,6 +4,55 @@ All notable changes to FireSMS will be documented in this file.
 
 ## Unreleased
 
+## 1.1.0 — 2026-11-10
+
+### Activity
+- Transactions that will retry on their own now show as **Waiting to sync** instead of Failed; Failed is kept for items that can't be retried or whose automatic retries ran out.
+- The health panel lists unparsed, failed and waiting items separately, and its colours now distinguish "all good" (green) from "needs attention" (amber).
+- New **Unmodified** and **Modified** filters, counts on every filter, and search by description, sender or amount.
+- The list loads a page at a time with database indexes, so it stays fast with long history.
+- Amounts are larger, signed (− / +) and green for deposits; dates include the year when needed and follow the 12/24-hour setting.
+- Transaction details open in a bottom sheet with Edit, Retry, Copy and Delete.
+- **Process sample SMS** warns that it creates a real transaction and reports the outcome.
+
+### Notifications
+- One notification per SMS (grouped), with the amount.
+- New **Needs attention** notifications for unparsed and failed messages that open the right screen.
+
+### Needs attention
+- **Try all again**, a progress spinner per message, readable results and a visible Delete button.
+
+### Rules
+- Rule testing explains why a message didn't match and shows every captured value and the parsed date.
+- A live preview re-runs the rule against the sample SMS as you type.
+- Rules created from an SMS match the bank's sender with any operator prefix (AD-, VM-, JD-…).
+- Errors are shown on the field at fault, with plain-language regex messages and help for named groups.
+- Importing rule JSON reports the error position and can be undone.
+- Rules with equal priority now run in name order.
+
+### Edit transaction
+- Splits show a live "allocated / left" total next to Save, and new splits get a sensible amount.
+- Group title is required for split transactions.
+- Removing a split can be undone; leaving with unsaved edits asks first.
+- The form opens as soon as the transaction loads, with Firefly suggestions loaded in the background and cached.
+
+### Settings and setup
+- Server addresses default to https, with a warning for http. Existing scheme-less addresses keep using http.
+- The connection test explains failures (rejected token, wrong URL, web page instead of API, unreachable, certificate).
+- A single **Save and test** button, URL and password keyboards, and a show/hide toggle for the access token.
+- A blocked SMS permission offers **Open app settings**; permission status refreshes when you return to the app.
+- New battery-optimisation step, and **Use wallpaper colours** on Android 12+.
+- **Wi-Fi only** sync now applies to new transactions too, not just retries.
+- Choosing a shorter history retention asks before deleting; restore reports what it replaced and keeps you out of onboarding.
+
+### Across the app
+- Back asks before discarding unsaved changes on every edit screen.
+- A complete colour scheme (no more purple-tinted dialogs), one consistent card style and a scroll-aware top bar.
+- Splash screen and correct light/dark launch window.
+- Fixed: the Automation page crashed on devices when any rule existed.
+- Debug builds install as a separate **FireSMS Debug** app (`com.firesms.app.debug`) with a grey icon and no update checks.
+- Release APKs are smaller (unused resources are removed).
+
 ## 1.0.4 — 2026-11-08
 
 - Fixed: SMS processing and retries check for matching transactions already in Firefly III and reuse them instead of creating duplicates, including after a request times out following a successful import.

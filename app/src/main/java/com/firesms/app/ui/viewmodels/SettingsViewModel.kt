@@ -63,6 +63,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     val updatePreferenceError = _updatePreferenceError.asStateFlow()
 
     fun checkForUpdates() {
+        if (!com.firesms.app.BuildConfig.UPDATE_CHECKS_ENABLED) return
         if (_updateCheckState.value == UpdateCheckState.Checking) return
         _updatePreferenceError.value = null
         _updateCheckState.value = UpdateCheckState.Checking

@@ -1,6 +1,7 @@
 package com.firesms.app.worker
 
 import android.content.Context
+import com.firesms.app.BuildConfig
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
@@ -37,6 +38,11 @@ internal fun appUpdateWorkRequest() = PeriodicWorkRequestBuilder<AppUpdateWorker
     .build()
 
 fun scheduleAppUpdateChecks(context: Context) {
+    if (!BuildConfig.UPDATE_CHECKS_ENABLED) {
+        // Debug builds: also clear a schedule left by an earlier build of this package.
+        WorkManager.getInstance(context).cancelUniqueWork("app_update_check")
+        return
+    }
     // The first check is eligible immediately. KEEP preserves cadence across app restarts.
     WorkManager.getInstance(context).enqueueUniquePeriodicWork(
         "app_update_check",

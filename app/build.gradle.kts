@@ -20,7 +20,16 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Installs next to the release app as com.firesms.app.debug, labelled and grey-iconed as debug
+            // (see src/debug/res). "+debug" is build metadata, so update checks still parse the version.
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "+debug"
+            // GitHub releases are the release package, so a debug build must never offer them.
+            buildConfigField("boolean", "UPDATE_CHECKS_ENABLED", "false")
+        }
         release {
+            buildConfigField("boolean", "UPDATE_CHECKS_ENABLED", "true")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(

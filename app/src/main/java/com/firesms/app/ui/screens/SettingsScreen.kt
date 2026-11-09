@@ -372,6 +372,7 @@ fun SettingsScreen(
                 }
             }
 
+            if (BuildConfig.UPDATE_CHECKS_ENABLED) {
             FireSmsSection(
                 title = "App updates",
                 subtitle = "Checks GitHub daily for stable releases. Nothing downloads automatically."
@@ -451,6 +452,14 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+            } else {
+                FireSmsSection(
+                    title = "App updates",
+                    subtitle = "Turned off in debug builds: GitHub releases install as a separate app."
+                ) {
+                    Text("Installed version: ${BuildConfig.VERSION_NAME}")
+                }
             }
 
             FireSmsSection(title = "About") {

@@ -59,6 +59,7 @@ enum class ActivityFilter(val label: String) {
     ALL("All"),
     NEEDS_ATTENTION("Attention"),
     WAITING("Waiting to sync"),
+    UNMODIFIED("Unmodified"),
     MODIFIED("Modified")
 }
 
@@ -183,6 +184,7 @@ class HomeViewModel(
                         smsLogDao.pageByStatus(listOf(SmsStatus.FAILED, SmsStatus.UNPARSED), pattern)
                     ActivityFilter.WAITING ->
                         smsLogDao.pageByStatus(listOf(SmsStatus.QUEUED, SmsStatus.PENDING), pattern)
+                    ActivityFilter.UNMODIFIED -> smsLogDao.pageUnmodified(pattern)
                     ActivityFilter.MODIFIED -> smsLogDao.pageModified(pattern)
                 }
             }.flow.map { paging ->

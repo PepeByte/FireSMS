@@ -26,6 +26,8 @@ data class ActivityCounts(
     val queued: Int = 0,
     val processing: Int = 0,
     val modified: Int = 0,
+    /** Synced transactions still exactly as FireSMS created them. */
+    val unmodified: Int = 0,
     /** Failed or queued items that can be retried by hand. */
     val retryable: Int = 0
 ) {
@@ -77,6 +79,12 @@ abstract class SmsLogDao {
     )
     abstract fun pageModified(pattern: String?): PagingSource<Int, ActivitySummary>
 
+    @Query(
+        "SELECT " + SUMMARY_COLUMNS + " FROM sms_log WHERE status = 'success' AND locally_modified_at IS NULL AND " +
+            SEARCH_CLAUSE + " ORDER BY received_at DESC, id DESC"
+    )
+    abstract fun pageUnmodified(pattern: String?): PagingSource<Int, ActivitySummary>
+
     @Query("""
         SELECT COUNT(*) AS total,
                COALESCE(SUM(status = 'unparsed'), 0) AS unparsed,
@@ -84,6 +92,7 @@ abstract class SmsLogDao {
                COALESCE(SUM(status = 'queued'), 0) AS queued,
                COALESCE(SUM(status = 'pending'), 0) AS processing,
                COALESCE(SUM(locally_modified_at IS NOT NULL), 0) AS modified,
+               COALESCE(SUM(status = 'success' AND locally_modified_at IS NULL), 0) AS unmodified,
                COALESCE(SUM(status IN ('failed', 'queued') AND firefly_id IS NULL), 0) AS retryable
         FROM sms_log
     """)

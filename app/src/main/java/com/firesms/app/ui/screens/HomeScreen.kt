@@ -321,6 +321,7 @@ private fun ActivityFilter.count(counts: ActivityCounts): Int = when (this) {
     ActivityFilter.ALL -> 0
     ActivityFilter.NEEDS_ATTENTION -> counts.attention
     ActivityFilter.WAITING -> counts.waiting
+    ActivityFilter.UNMODIFIED -> counts.unmodified
     ActivityFilter.MODIFIED -> counts.modified
 }
 
@@ -535,6 +536,11 @@ private fun ActivityEmptyState(hasAnyActivity: Boolean, filter: ActivityFilter, 
         )
         filter == ActivityFilter.WAITING -> Triple(
             Icons.Outlined.CloudDone, "Nothing waiting to sync", "Everything FireSMS read has reached Firefly."
+        )
+        filter == ActivityFilter.UNMODIFIED -> Triple(
+            Icons.Outlined.CloudDone,
+            "No unmodified transactions",
+            "Synced transactions still exactly as FireSMS created them appear here."
         )
         filter == ActivityFilter.MODIFIED -> Triple(
             Icons.Outlined.EditNote,

@@ -15,7 +15,11 @@ object SenderPatterns {
     private val BANK_HEADER = Regex("""^(?:[A-Za-z]{2}-)?([A-Za-z0-9]*[A-Za-z][A-Za-z0-9]*)(?:-[A-Za-z])?$""")
 
     /** The shape [suggestFor] produces for bank headers, so it can be shown in plain words. */
-    private val GENERATED_HEADER = Regex("""^\(\?i\)\^\(\[A-Z]\{2}-\)\?([A-Za-z0-9]+)\(-\[A-Z]\)\?\$$""")
+    // Built from quoted literals: Android's ICU regex engine rejects an unescaped `]` or `}`
+    // that desktop Java accepts, which crashed every screen listing rules.
+    private val GENERATED_HEADER = Regex(
+        "^" + Regex.escape("(?i)^$PREFIX") + "([A-Za-z0-9]+)" + Regex.escape("$SUFFIX$") + "$"
+    )
 
     /**
      * A readable pattern that matches [sender] and the other headers the same bank uses.

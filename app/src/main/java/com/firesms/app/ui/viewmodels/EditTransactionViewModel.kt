@@ -236,8 +236,13 @@ class EditTransactionViewModel(application: Application) : AndroidViewModel(appl
             }
         }
 
-        // For multiple splits, validate sum
+        // For multiple splits, require a group title and validate sum
         if (current.rows.size > 1) {
+            if (current.groupTitle.isBlank()) {
+                _state.value = current.copy(saveError = "Group title is required for split transactions")
+                return
+            }
+
             val splitSum = current.rows.sumOf { row -> BigDecimal(row.amount.trim()) }
             val original = try {
                 BigDecimal(current.originalTotal)
@@ -297,11 +302,7 @@ class EditTransactionViewModel(application: Application) : AndroidViewModel(appl
                     )
                 }
                 val updateRequest = TransactionUpdateRequest(
-                    groupTitle = if (mergedSplits.size > 1) {
-                        current.groupTitle.ifBlank { "Split transaction" }
-                    } else {
-                        current.groupTitle.ifBlank { null }
-                    },
+                    groupTitle = current.groupTitle.trim().ifBlank { null },
                     transactions = mergedSplits
                 )
                 val result = api.updateTransaction(baseUrl, current.fireflyTxId, updateRequest)

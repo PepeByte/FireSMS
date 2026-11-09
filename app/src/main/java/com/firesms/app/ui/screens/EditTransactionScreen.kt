@@ -136,13 +136,16 @@ fun EditTransactionScreen(
 
                     // ── Group title — only for split transactions ──
                     if (state.rows.size > 1) {
+                        val groupTitleMissing = state.groupTitle.isBlank()
                         FireSmsAutocompleteField(
                             value = state.groupTitle,
-                            onValueChange = { v -> viewModel.updateTransactionField { it.copy(groupTitle = v) } },
-                            label = "Group Title",
+                            onValueChange = { v -> viewModel.updateTransactionField { it.copy(groupTitle = v, saveError = null) } },
+                            label = "Group Title *",
                             suggestions = state.descriptionSuggestions,
                             modifier = Modifier.fillMaxWidth(),
-                            leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) }
+                            leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                            isError = groupTitleMissing,
+                            supportingText = if (groupTitleMissing) "Required for split transactions" else null
                         )
                     }
 

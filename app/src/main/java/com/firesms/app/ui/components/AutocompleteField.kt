@@ -13,7 +13,9 @@ fun FireSmsAutocompleteField(
     label: String,
     suggestions: List<String>,
     modifier: Modifier = Modifier,
-    leadingIcon: (@Composable () -> Unit)? = null
+    leadingIcon: (@Composable () -> Unit)? = null,
+    isError: Boolean = false,
+    supportingText: String? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
     val filtered = remember(suggestions, value) {
@@ -35,6 +37,8 @@ fun FireSmsAutocompleteField(
             label = { Text(label) },
             singleLine = true,
             leadingIcon = leadingIcon,
+            isError = isError,
+            supportingText = supportingText?.let { { Text(it) } },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryEditable, enabled = true)
         )

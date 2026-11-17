@@ -132,6 +132,7 @@ fun HomeScreen(
                 val result = snackbarHostState.showSnackbar(
                     message = message.text,
                     actionLabel = message.action?.label,
+                    withDismissAction = true,
                     duration = if (message.action != null) SnackbarDuration.Long else SnackbarDuration.Short
                 )
                 if (result == SnackbarResult.ActionPerformed) {
@@ -707,35 +708,32 @@ private fun ActivityDetailSheet(
     }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
-        Box {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                // Header
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    if (detail.amount != null) {
-                        Text(
-                            detail.amount,
-                            style = MaterialTheme.typography.headlineMedium,
-                            color = amountColor(detail.direction)
-                        )
-                    }
-                    Text(detail.headline, style = MaterialTheme.typography.titleMedium)
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        FireSmsStatusPill(label = statusLabel(log.status), color = statusColor(log.status))
-                        if (detail.isModified) {
-                            FireSmsStatusPill(label = "Modified", color = MaterialTheme.colorScheme.secondary)
-                        }
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // Header
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                if (detail.amount != null) {
+                    Text(
+                        detail.amount,
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = amountColor(detail.direction)
+                    )
+                }
+                Text(detail.headline, style = MaterialTheme.typography.titleMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FireSmsStatusPill(label = statusLabel(log.status), color = statusColor(log.status))
+                    if (detail.isModified) {
+                        FireSmsStatusPill(label = "Modified", color = MaterialTheme.colorScheme.secondary)
                     }
                 }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-                Column(
-                    modifier = Modifier
-                        .weight(1f, fill = false)
-                        .verticalScroll(rememberScrollState())
-                ) {
+            // The snackbar overlays the bottom of the details, never the action row below.
+            Box(modifier = Modifier.weight(1f, fill = false)) {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     if (detail.isModified) {
                         DetailItem(
                             label = "Modified",
@@ -787,38 +785,38 @@ private fun ActivityDetailSheet(
                     log.fireflyId?.let { DetailItem(label = "Firefly ID", value = it) }
                     DetailItem(label = "Original SMS", value = log.body)
                 }
+                SnackbarHost(snackbarHostState, modifier = Modifier.align(Alignment.BottomCenter))
+            }
 
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    TextButton(
-                        onClick = { showDeleteConfirm = true },
-                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                    ) { Text("Delete") }
-                    Spacer(Modifier.weight(1f))
-                    TextButton(onClick = { copy("SMS", log.body) }) { Text("Copy") }
-                    if (detail.canRetry || isRetrying) {
-                        TextButton(onClick = onRetry, enabled = retryEnabled && !isRetrying) {
-                            if (isRetrying) {
-                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                                Spacer(Modifier.width(8.dp))
-                                Text("Retrying…")
-                            } else {
-                                Text("Retry")
-                            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                TextButton(
+                    onClick = { showDeleteConfirm = true },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) { Text("Delete") }
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = { copy("SMS", log.body) }) { Text("Copy") }
+                if (detail.canRetry || isRetrying) {
+                    TextButton(onClick = onRetry, enabled = retryEnabled && !isRetrying) {
+                        if (isRetrying) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Retrying…")
+                        } else {
+                            Text("Retry")
                         }
                     }
-                    if (log.fireflyId != null) {
-                        Button(onClick = onEditTransaction) { Text("Edit") }
-                    }
+                }
+                if (log.fireflyId != null) {
+                    Button(onClick = onEditTransaction) { Text("Edit") }
                 }
             }
-            SnackbarHost(snackbarHostState, modifier = Modifier.align(Alignment.BottomCenter))
         }
     }
 

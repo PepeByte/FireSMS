@@ -4,7 +4,12 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.firesms.app.FireSmsApp
+import com.firesms.app.data.local.SplitOffRecord
+import com.firesms.app.data.local.SplitOffStatus
+import com.firesms.app.data.local.decodeSplitOffs
+import com.firesms.app.data.local.encodeSplitOffs
 import com.firesms.app.data.local.entity.SmsLog
+import com.firesms.app.data.local.newSplitOffExternalId
 import com.firesms.app.data.local.decodeTransactionSnapshot
 import com.firesms.app.data.local.encode
 import com.firesms.app.data.local.semanticallyEquals
@@ -42,7 +47,9 @@ data class EditableFields(
     val transactionDate: String,
     val sourceName: String,
     val destinationName: String,
-    val rows: List<EditRowState>
+    val rows: List<EditRowState>,
+    val splitOffs: List<SplitOffState> = emptyList(),
+    val deletedSplitOffIds: List<String> = emptyList()
 )
 
 /** A split the user just removed, kept so a snackbar can put it back. [id] makes each removal distinct. */
@@ -65,6 +72,18 @@ data class EditTransactionState(
     val currencyCode: String = "",
     val currencySymbol: String = "",
     val rows: List<EditRowState> = emptyList(),
+    /**
+     * The whole payment: the original transaction plus its split-offs, as loaded. While split-offs
+     * exist, the original's splits and the split-offs must add up to this.
+     */
+    val paymentTotal: String = "",
+    val splitOffs: List<SplitOffState> = emptyList(),
+    /** Stored split-offs the user removed; they are deleted from Firefly on save. */
+    val deletedSplitOffs: List<SplitOffState> = emptyList(),
+    /** The Firefly address, for "Open in Firefly" links. */
+    val fireflyBaseUrl: String = "",
+    /** A one-off message for the snackbar, e.g. after removing a split-off. */
+    val notice: String? = null,
     val originalSplits: List<FireflyTransactionSplit> = emptyList(),
     val loaded: EditableFields? = null,
     val categorySuggestions: List<String> = emptyList(),
@@ -89,8 +108,23 @@ data class EditTransactionState(
         transactionDate = transactionDate,
         sourceName = sourceName,
         destinationName = destinationName,
-        rows = rows.map { it.copy(amountError = null) }
+        rows = rows.map { it.copy(amountError = null) },
+        splitOffs = splitOffs.map { it.withoutErrors() },
+        deletedSplitOffIds = deletedSplitOffs.mapNotNull { it.fireflyId }
     )
+
+    /** What the payer's own splits should add up to: the payment minus its split-offs. */
+    fun payerShareTotal(): String {
+        val total = parseEditAmount(paymentTotal) ?: return originalTotal
+        if (splitOffs.isEmpty()) return total.setScale(2, RoundingMode.HALF_UP).toPlainString()
+        val splitOff = splitOffs.sumOf { parseEditAmount(it.amount) ?: BigDecimal.ZERO }
+        return total.subtract(splitOff).setScale(2, RoundingMode.HALF_UP).toPlainString()
+    }
+
+    /** Split-offs need a withdrawal or deposit and the SMS hash for their external ids. */
+    val canSplitOff: Boolean get() = supportsSplitOff(transactionType) && smsLog != null
+
+    val hasSplitOffs: Boolean get() = splitOffs.isNotEmpty()
 
     val isDirty: Boolean get() = loaded != null && editableFields() != loaded
 }
@@ -169,6 +203,16 @@ class EditTransactionViewModel(application: Application) : AndroidViewModel(appl
 
                 val originalSplits = txResponse.data.attributes.transactions
                 val firstSplit = originalSplits.firstOrNull()
+                val stored = loadSplitOffs(api, baseUrl, log, firstSplit?.date.orEmpty())
+                val rows = originalSplits.map { it.toRow() }
+                val recovered = recoverPayment(
+                    groupTotal = splitTotal(originalSplits),
+                    rowAmounts = rows.map { it.amount },
+                    active = stored.active,
+                    creating = stored.creating,
+                    removing = stored.removing,
+                    removed = stored.removed
+                )
                 val loadedState = EditTransactionState(
                     loading = false,
                     smsLog = log,
@@ -183,11 +227,23 @@ class EditTransactionViewModel(application: Application) : AndroidViewModel(appl
                     originalTotal = splitTotal(originalSplits),
                     currencyCode = firstSplit?.currencyCode ?: "",
                     currencySymbol = firstSplit?.currencySymbol ?: "",
-                    rows = originalSplits.map { it.toRow() },
+                    rows = rows,
+                    paymentTotal = recovered.paymentTotal,
+                    fireflyBaseUrl = baseUrl,
+                    splitOffs = recovered.splitOffs,
                     originalSplits = originalSplits
                 )
+                // "Loaded" is Firefly as it stands, so finishing an interrupted save counts as a change.
+                val asStored = loadedState.editableFields()
+                val shown = loadedState.copy(
+                    rows = rows.mapIndexed { i, row -> row.copy(amount = recovered.rowAmounts[i]) },
+                    deletedSplitOffs = recovered.deletedSplitOffs,
+                    notice = if (recovered.interrupted) {
+                        "The last save didn't finish. Check the amounts and tap Save to complete it."
+                    } else null
+                )
                 // Show the form now; suggestions fill in as they arrive.
-                _state.value = loadedState.copy(loaded = loadedState.editableFields())
+                _state.value = shown.copy(loaded = asStored)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -241,6 +297,79 @@ class EditTransactionViewModel(application: Application) : AndroidViewModel(appl
         ).awaitAll()
     }
 
+    private class StoredSplitOffs(
+        val active: List<SplitOffState>,
+        val creating: List<SplitOffState>,
+        val removing: List<SplitOffState>,
+        val removed: List<SplitOffState>
+    )
+
+    /**
+     * Reads every stored split-off from Firefly, grouped by how far its last save got. One deleted
+     * in Firefly is forgotten, as is a create that never reached it; any other failure fails the
+     * load, since the payment total depends on them.
+     */
+    private suspend fun loadSplitOffs(
+        api: FireflyApi,
+        baseUrl: String,
+        log: SmsLog,
+        originalDate: String
+    ): StoredSplitOffs {
+        val records = decodeSplitOffs(log.splitOffsJson)
+        val empty = StoredSplitOffs(emptyList(), emptyList(), emptyList(), emptyList())
+        if (records.isEmpty()) return empty
+
+        val resolved: List<Pair<SplitOffRecord, FireflyTransactionAttributes?>?> = coroutineScope {
+            records.map { record ->
+                async {
+                    when {
+                        record.status == SplitOffStatus.REMOVED -> record to null
+                        record.fireflyId == null -> {
+                            // The create may have reached Firefly before the app stopped.
+                            val day = record.date.ifBlank { originalDate }.take(10)
+                            val group = api.findTransactionByExternalId(baseUrl, day, record.externalId)
+                            group?.takeIf { it.attributes.transactions.isNotEmpty() }?.let {
+                                val journalId = it.attributes.transactions.first().transactionJournalId
+                                record.copy(fireflyId = it.id, transactionJournalId = journalId) to it.attributes
+                            }
+                        }
+                        else -> try {
+                            val attributes = api.getTransaction(baseUrl, record.fireflyId).data.attributes
+                            attributes.takeIf { it.transactions.isNotEmpty() }?.let { record to it }
+                        } catch (e: FireflyUnavailable) {
+                            if (e.statusCode == 404) null else throw e
+                        }
+                    }
+                }
+            }.awaitAll()
+        }
+        val kept = resolved.filterNotNull()
+        val keptRecords = kept.map { it.first }
+        if (keptRecords != records) smsLogDao.updateSplitOffs(log.id, encodeSplitOffs(keptRecords))
+
+        fun stateOf(entry: Pair<SplitOffRecord, FireflyTransactionAttributes?>): SplitOffState {
+            val (record, attributes) = entry
+            return if (attributes != null) {
+                splitOffFromFirefly(nextKey++, record, attributes.transactions, attributes.groupTitle) { nextKey++ }
+            } else splitOffFromRecord(nextKey++, nextKey++, record)
+        }
+        fun withStatus(status: String) = kept.filter { it.first.status == status }.map(::stateOf)
+        return StoredSplitOffs(
+            // Records from before statuses existed decode as active.
+            active = kept.filter {
+                it.first.status !in setOf(SplitOffStatus.CREATING, SplitOffStatus.REMOVING, SplitOffStatus.REMOVED)
+            }.map(::stateOf),
+            creating = withStatus(SplitOffStatus.CREATING),
+            removing = withStatus(SplitOffStatus.REMOVING),
+            removed = withStatus(SplitOffStatus.REMOVED)
+        )
+    }
+
+    private fun paymentTotal(splits: List<FireflyTransactionSplit>, splitOffs: List<SplitOffState>): String =
+        (splits.sumOf { BigDecimal(it.amount).setScale(2, RoundingMode.HALF_UP) } +
+            splitOffs.sumOf { parseEditAmount(it.amount)?.setScale(2, RoundingMode.HALF_UP) ?: BigDecimal.ZERO })
+            .toPlainString()
+
     private fun FireflyTransactionSplit.toRow() = EditRowState(
         key = nextKey++,
         transactionJournalId = transactionJournalId,
@@ -268,7 +397,7 @@ class EditTransactionViewModel(application: Application) : AndroidViewModel(appl
     fun addRow(): Int {
         var newIndex = -1
         _state.update { current ->
-            val allocation = allocateNewSplit(current.originalTotal, current.rows.map { it.amount })
+            val allocation = allocateNewSplit(current.payerShareTotal(), current.rows.map { it.amount })
             val rows = current.rows.mapIndexed { i, row ->
                 val amount = allocation.amounts[i]
                 if (amount == row.amount) row else row.copy(amount = amount, amountError = null)
@@ -309,16 +438,150 @@ class EditTransactionViewModel(application: Application) : AndroidViewModel(appl
 
     fun clearSaveError() = _state.update { it.copy(saveError = null, saveErrorDetail = null) }
 
+    fun clearNotice() = _state.update { it.copy(notice = null) }
+
+    // ─── Split-offs ────────────────────────────────────────────
+
+    /** Adds a split-off that takes half of the payer's share, and returns its key for focusing. */
+    fun addSplitOff(): Long? {
+        var newKey: Long? = null
+        _state.update { current ->
+            val log = current.smsLog
+            if (!current.canSplitOff || log == null) return@update current
+            val allocation = allocateSplitOff(
+                current.paymentTotal,
+                current.rows.map { it.amount },
+                current.splitOffs.map { it.amount }
+            )
+            val rows = current.rows.mapIndexed { i, row ->
+                val amount = allocation.amounts[i]
+                if (amount == row.amount) row else row.copy(amount = amount, amountError = null)
+            }
+            val piece = SplitOffState(
+                key = nextKey++,
+                externalId = newSplitOffExternalId(log.smsHash),
+                parts = listOf(
+                    SplitOffPart(
+                        key = nextKey++,
+                        amount = allocation.newAmount,
+                        description = current.rows.firstOrNull()?.description?.ifBlank { null }
+                            ?: current.groupTitle,
+                        notes = SPLIT_OFF_NOTES
+                    )
+                )
+            )
+            newKey = piece.key
+            current.copy(rows = rows, splitOffs = current.splitOffs + piece)
+        }
+        return newKey
+    }
+
+    /**
+     * Replaces the split-off with [piece]'s key. A changed amount is taken from (or given back to)
+     * the payer's last split so the payment stays balanced; a retyped account drops its Firefly id.
+     */
+    fun updateSplitOff(piece: SplitOffState) {
+        _state.update { current ->
+            val index = current.splitOffs.indexOfFirst { it.key == piece.key }
+            if (index < 0) return@update current
+            val previous = current.splitOffs[index]
+            // Editing a field clears its error; other edits leave errors in place.
+            var updated = piece.copy(parts = piece.parts.map { part ->
+                val before = previous.parts.firstOrNull { it.key == part.key }
+                if (before != null && before.amount != part.amount) part.copy(amountError = null) else part
+            })
+            if (piece.accountName != previous.accountName) updated = updated.copy(accountId = null, accountError = null)
+            if (piece.groupTitle != previous.groupTitle) updated = updated.copy(groupTitleError = null)
+
+            val splitOffs = current.splitOffs.toMutableList().also { it[index] = updated }
+            val rebalanced = if (piece.amount != previous.amount) {
+                rebalanceForSplitOff(current.paymentTotal, current.rows.map { it.amount }, splitOffs.map { it.amount })
+            } else null
+            val rows = rebalanced?.let { amounts ->
+                current.rows.mapIndexed { i, row ->
+                    if (amounts[i] == row.amount) row else row.copy(amount = amounts[i], amountError = null)
+                }
+            } ?: current.rows
+            current.copy(rows = rows, splitOffs = splitOffs)
+        }
+    }
+
+    /** Removes a split-off and gives its amount back to the payer. A stored one is deleted on save. */
+    fun removeSplitOff(key: Long) {
+        _state.update { current ->
+            val piece = current.splitOffs.firstOrNull { it.key == key } ?: return@update current
+            val amounts = returnSplitOffAmount(current.rows.map { it.amount }, piece.amount)
+            val rows = current.rows.mapIndexed { i, row ->
+                if (amounts[i] == row.amount) row else row.copy(amount = amounts[i], amountError = null)
+            }
+            current.copy(
+                rows = rows,
+                splitOffs = current.splitOffs.filterNot { it.key == key },
+                deletedSplitOffs = if (piece.isSaved) current.deletedSplitOffs + piece else current.deletedSplitOffs,
+                notice = if (piece.isSaved) "Split-off removed. It's deleted from Firefly when you save."
+                else "Split-off removed"
+            )
+        }
+    }
+
+    /**
+     * Adds a split inside the split-off with [pieceKey], taking half of its last split so neither
+     * the split-off's total nor the payer's share changes. Returns the new split's key for focusing.
+     */
+    fun addSplitOffPart(pieceKey: Long): Long? {
+        var newKey: Long? = null
+        _state.update { current ->
+            val index = current.splitOffs.indexOfFirst { it.key == pieceKey }
+            if (index < 0) return@update current
+            val key = nextKey++
+            newKey = key
+            val piece = addSplitOffPart(current.splitOffs[index], key)
+            current.copy(splitOffs = current.splitOffs.toMutableList().also { it[index] = piece })
+        }
+        return newKey
+    }
+
+    /** Removes a split inside a split-off; its amount joins the split before it. */
+    fun removeSplitOffPart(pieceKey: Long, partKey: Long) {
+        _state.update { current ->
+            val index = current.splitOffs.indexOfFirst { it.key == pieceKey }
+            if (index < 0) return@update current
+            val piece = removeSplitOffPart(current.splitOffs[index], partKey)
+            if (piece == current.splitOffs[index]) return@update current
+            current.copy(
+                splitOffs = current.splitOffs.toMutableList().also { it[index] = piece },
+                notice = "Split removed. Its amount moved to the split above."
+            )
+        }
+    }
+
     fun save() {
         val current = _state.value
         if (current.saving || current.fireflyTxId == null) return
 
-        val validation = validateEdit(current.rows.map { it.amount }, current.groupTitle, current.originalTotal)
-        if (!validation.isValid) {
+        val validation = validateEdit(
+            current.rows.map { it.amount },
+            current.groupTitle,
+            current.paymentTotal.ifBlank { current.originalTotal },
+            splitOffPartAmounts(current.splitOffs)
+        )
+        val splitOffValidation = validateSplitOffs(current.transactionType, current.splitOffs)
+        if (!validation.isValid || !splitOffValidation.isValid) {
             _state.value = current.copy(
                 rows = current.rows.mapIndexed { i, row -> row.copy(amountError = validation.amountErrors[i]) },
+                splitOffs = current.splitOffs.mapIndexed { i, piece ->
+                    piece.copy(
+                        accountError = splitOffValidation.accountErrors[i],
+                        groupTitleError = splitOffValidation.groupTitleErrors[i],
+                        parts = piece.parts.mapIndexed { j, part ->
+                            part.copy(amountError = splitOffValidation.amountErrors[i]?.get(j))
+                        }
+                    )
+                },
                 groupTitleError = validation.groupTitleError,
-                saveError = validation.summary,
+                saveError = splitOffValidation.typeError
+                    ?: validation.summary
+                    ?: "Fix the highlighted fields",
                 saveErrorDetail = null
             )
             return
@@ -332,67 +595,39 @@ class EditTransactionViewModel(application: Application) : AndroidViewModel(appl
             val api = FireflyApi(token)
             try {
                 val originalSplits = current.originalSplits
-
-                val mergedSplits = current.rows.mapIndexed { i, row ->
-                    val original = originalSplits.getOrNull(i)
-                    val roundedAmount = parseEditAmount(row.amount)!!.setScale(2, RoundingMode.HALF_UP).toPlainString()
-
-                    // Resolve title mapping for blank category/budget on save
-                    val catName = row.categoryName.ifBlank { null }
-                    val budName = row.budgetName.ifBlank { null }
-                    val resolvedCat = if (catName == null && budName == null) {
-                        val mappingRule = mappingResolver.resolve(row.description.ifBlank { original?.description ?: "" })
-                        if (mappingRule != null) {
-                            Pair(
-                                mappingRule.categoryName.takeIf { it.isNotBlank() },
-                                mappingRule.budgetName.takeIf { it.isNotBlank() }
-                            )
-                        } else null to null
-                    } else catName to budName
-
-                    TransactionUpdateSplit(
-                        transactionJournalId = row.transactionJournalId,
-                        type = current.transactionType,
-                        date = current.transactionDate.ifBlank { original?.date ?: "" },
-                        amount = roundedAmount,
-                        description = row.description.ifBlank { original?.description ?: "" },
-                        sourceId = current.sourceId ?: original?.sourceId,
-                        sourceName = current.sourceName.ifBlank { original?.sourceName },
-                        destinationId = current.destinationId ?: original?.destinationId,
-                        destinationName = current.destinationName.ifBlank { original?.destinationName },
-                        categoryName = resolvedCat.first ?: row.categoryName.ifBlank { null },
-                        budgetName = resolvedCat.second ?: row.budgetName.ifBlank { null },
-                        notes = row.notes.ifBlank { original?.notes },
-                        order = i
-                    )
-                }
-                val updateRequest = TransactionUpdateRequest(
-                    groupTitle = current.groupTitle.trim().ifBlank { null },
-                    transactions = mergedSplits
+                val firstOriginal = originalSplits.firstOrNull()
+                val shared = SharedPaymentFields(
+                    type = current.transactionType,
+                    date = current.transactionDate.ifBlank { firstOriginal?.date ?: "" },
+                    sourceId = current.sourceId ?: firstOriginal?.sourceId,
+                    sourceName = current.sourceName.ifBlank { firstOriginal?.sourceName },
+                    destinationId = current.destinationId ?: firstOriginal?.destinationId,
+                    destinationName = current.destinationName.ifBlank { firstOriginal?.destinationName }
                 )
-                val result = api.updateTransaction(baseUrl, current.fireflyTxId, updateRequest)
-                // Refresh state from the response
+
+                // Order matters, so that a failure part-way never loses money from Firefly:
+                // new split-offs are stored before the original shrinks, and removed split-offs
+                // are deleted only after the original has grown back. Saving again resumes safely.
+                // Each record's status says which step was reached, so reopening the editor after an
+                // interruption restores the intended amounts (see recoverPayment).
+                val created = createNewSplitOffs(api, baseUrl, current, shared)
+                updateChangedSplitOffs(api, baseUrl, current, shared, skipKeys = created)
+                markRemovalsStarted(current)
+                val result = updateOriginal(api, baseUrl, current)
+                markOriginalUpdated(current)
+                deleteRemovedSplitOffs(api, baseUrl, current)
+                linkSplitOffs(api, baseUrl, current.smsLog?.id, result.data.attributes.transactions)
+
                 val updatedSplits = result.data.attributes.transactions
                 val firstUpdated = updatedSplits.firstOrNull()
-
-                current.smsLog?.let { log ->
-                    val storedLog = smsLogDao.getById(log.id)
-                    val updatedSnapshot = result.data.attributes.toStoredSnapshot()
-                    val baseline = decodeTransactionSnapshot(storedLog?.originalTransactionSnapshotJson)
-                    val isModified = baseline?.let { !it.semanticallyEquals(updatedSnapshot) } ?: false
-                    smsLogDao.updateTransactionSnapshotState(
-                        log.id,
-                        updatedSnapshot.encode(),
-                        if (isModified) storedLog?.locallyModifiedAt ?: System.currentTimeMillis() else null
-                    )
-                }
-
                 _state.update { latest ->
                     val refreshed = latest.copy(
                         saving = false,
                         rows = updatedSplits.map { it.toRow() },
                         originalSplits = updatedSplits,
                         originalTotal = splitTotal(updatedSplits),
+                        paymentTotal = paymentTotal(updatedSplits, latest.splitOffs),
+                        deletedSplitOffs = emptyList(),
                         currencyCode = firstUpdated?.currencyCode ?: current.currencyCode,
                         currencySymbol = firstUpdated?.currencySymbol ?: current.currencySymbol,
                         groupTitle = result.data.attributes.groupTitle ?: "",
@@ -419,6 +654,263 @@ class EditTransactionViewModel(application: Application) : AndroidViewModel(appl
                 api.close()
             }
         }
+    }
+
+    /**
+     * Stores every split-off Firefly does not hold yet and returns their keys. Each one is recorded
+     * on the SMS log as soon as it exists, so a later failure cannot orphan it, and a create that
+     * timed out is found again by its external id instead of being repeated.
+     */
+    private suspend fun createNewSplitOffs(
+        api: FireflyApi,
+        baseUrl: String,
+        current: EditTransactionState,
+        shared: SharedPaymentFields
+    ): Set<Long> {
+        val logId = current.smsLog?.id ?: return emptySet()
+        val created = mutableSetOf<Long>()
+        for (piece in current.splitOffs.filterNot { it.isSaved }) {
+            // Recorded before the request: if the app stops before the response arrives, reopening
+            // the editor looks for the transaction by its external id.
+            val pending = SplitOffRecord(
+                externalId = piece.externalId,
+                amount = moneyText(piece.amount),
+                accountName = piece.accountName.trim(),
+                description = piece.title,
+                date = shared.date,
+                status = SplitOffStatus.CREATING,
+                createdAt = System.currentTimeMillis()
+            )
+            editSplitOffRecords(logId) { records ->
+                if (records.any { it.externalId == piece.externalId }) records else records + pending
+            }
+            val existing = try {
+                api.findTransactionByExternalId(baseUrl, shared.date.take(10), piece.externalId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: FireflyUnavailable) {
+                throw e
+            } catch (_: Exception) {
+                null
+            }
+            val group = existing ?: api.createTransactionGroup(baseUrl, buildSplitOffCreateRequest(shared, piece))
+            val journalId = group.attributes.transactions.firstOrNull()?.transactionJournalId
+            editSplitOffRecords(logId) { records ->
+                records.map {
+                    if (it.externalId == piece.externalId) it.copy(fireflyId = group.id, transactionJournalId = journalId)
+                    else it
+                }
+            }
+            _state.update { latest ->
+                latest.copy(splitOffs = latest.splitOffs.map {
+                    if (it.key == piece.key) withJournalIds(it.copy(fireflyId = group.id), group.attributes.transactions)
+                    else it
+                })
+            }
+            created += piece.key
+        }
+        return created
+    }
+
+    /** Saves stored split-offs whose own fields, or the payment fields they share, changed. */
+    private suspend fun updateChangedSplitOffs(
+        api: FireflyApi,
+        baseUrl: String,
+        current: EditTransactionState,
+        shared: SharedPaymentFields,
+        skipKeys: Set<Long>
+    ) {
+        val loaded = current.loaded
+        val sharedChanged = loaded == null ||
+            loaded.transactionType != current.transactionType ||
+            loaded.transactionDate != current.transactionDate ||
+            loaded.sourceName != current.sourceName ||
+            loaded.destinationName != current.destinationName
+        val logId = current.smsLog?.id
+        for (piece in current.splitOffs) {
+            val fireflyId = piece.fireflyId ?: continue
+            if (piece.key in skipKeys) continue
+            val before = loaded?.splitOffs?.firstOrNull { it.key == piece.key }
+            if (!sharedChanged && before == piece.withoutErrors()) continue
+            val result = api.updateTransaction(baseUrl, fireflyId, buildSplitOffUpdateRequest(shared, piece))
+            val splits = result.data.attributes.transactions
+            if (logId != null) {
+                val firstJournalId = splits.firstOrNull()?.transactionJournalId
+                editSplitOffRecords(logId) { records ->
+                    records.map {
+                        if (it.fireflyId == fireflyId) it.copy(
+                            amount = moneyText(piece.amount),
+                            accountName = piece.accountName.trim(),
+                            description = piece.title,
+                            transactionJournalId = firstJournalId ?: it.transactionJournalId,
+                            // Removing the first split deletes the journal the link was on; link the new one.
+                            linked = it.linked && (firstJournalId == null || firstJournalId == it.transactionJournalId)
+                        ) else it
+                    }
+                }
+            }
+            // Splits added here now have journals; keep them so a second save updates, not duplicates.
+            _state.update { latest ->
+                latest.copy(splitOffs = latest.splitOffs.map { if (it.key == piece.key) withJournalIds(it, splits) else it })
+            }
+        }
+    }
+
+    private suspend fun updateOriginal(
+        api: FireflyApi,
+        baseUrl: String,
+        current: EditTransactionState
+    ): FireflyTransactionResponse {
+        val fireflyTxId = current.fireflyTxId!!
+        val originalSplits = current.originalSplits
+        val mergedSplits = current.rows.mapIndexed { i, row ->
+            val original = originalSplits.getOrNull(i)
+            val roundedAmount = parseEditAmount(row.amount)!!.setScale(2, RoundingMode.HALF_UP).toPlainString()
+
+            // Resolve title mapping for blank category/budget on save
+            val catName = row.categoryName.ifBlank { null }
+            val budName = row.budgetName.ifBlank { null }
+            val resolvedCat = if (catName == null && budName == null) {
+                val mappingRule = mappingResolver.resolve(row.description.ifBlank { original?.description ?: "" })
+                if (mappingRule != null) {
+                    Pair(
+                        mappingRule.categoryName.takeIf { it.isNotBlank() },
+                        mappingRule.budgetName.takeIf { it.isNotBlank() }
+                    )
+                } else null to null
+            } else catName to budName
+
+            TransactionUpdateSplit(
+                transactionJournalId = row.transactionJournalId,
+                type = current.transactionType,
+                date = current.transactionDate.ifBlank { original?.date ?: "" },
+                amount = roundedAmount,
+                description = row.description.ifBlank { original?.description ?: "" },
+                sourceId = current.sourceId ?: original?.sourceId,
+                sourceName = current.sourceName.ifBlank { original?.sourceName },
+                destinationId = current.destinationId ?: original?.destinationId,
+                destinationName = current.destinationName.ifBlank { original?.destinationName },
+                categoryName = resolvedCat.first ?: row.categoryName.ifBlank { null },
+                budgetName = resolvedCat.second ?: row.budgetName.ifBlank { null },
+                notes = row.notes.ifBlank { original?.notes },
+                order = i
+            )
+        }
+        val updateRequest = TransactionUpdateRequest(
+            groupTitle = current.groupTitle.trim().ifBlank { null },
+            transactions = mergedSplits
+        )
+        val result = api.updateTransaction(baseUrl, fireflyTxId, updateRequest)
+
+        current.smsLog?.let { log ->
+            val storedLog = smsLogDao.getById(log.id)
+            val updatedSnapshot = result.data.attributes.toStoredSnapshot()
+            val baseline = decodeTransactionSnapshot(storedLog?.originalTransactionSnapshotJson)
+            val isModified = baseline?.let { !it.semanticallyEquals(updatedSnapshot) } ?: false
+            smsLogDao.updateTransactionSnapshotState(
+                log.id,
+                updatedSnapshot.encode(),
+                if (isModified) storedLog?.locallyModifiedAt ?: System.currentTimeMillis() else null
+            )
+        }
+        return result
+    }
+
+    /**
+     * Before the original gets removed split-offs' amounts back: an active split-off becomes
+     * "removing". One whose amount the original never gave up (still "creating") is already "removed".
+     */
+    private suspend fun markRemovalsStarted(current: EditTransactionState) {
+        val logId = current.smsLog?.id ?: return
+        val ids = current.deletedSplitOffs.mapNotNull { it.fireflyId }.toSet()
+        if (ids.isEmpty()) return
+        editSplitOffRecords(logId) { records ->
+            records.map { record ->
+                if (record.fireflyId !in ids) record
+                else when (record.status) {
+                    SplitOffStatus.CREATING -> record.copy(status = SplitOffStatus.REMOVED)
+                    SplitOffStatus.REMOVING, SplitOffStatus.REMOVED -> record
+                    else -> record.copy(status = SplitOffStatus.REMOVING)
+                }
+            }
+        }
+    }
+
+    /** The original now matches: new split-offs are active and removed ones only need deleting. */
+    private suspend fun markOriginalUpdated(current: EditTransactionState) {
+        val logId = current.smsLog?.id ?: return
+        editSplitOffRecords(logId) { records ->
+            records.map { record ->
+                when (record.status) {
+                    SplitOffStatus.CREATING ->
+                        if (record.fireflyId != null) record.copy(status = SplitOffStatus.ACTIVE) else record
+                    SplitOffStatus.REMOVING -> record.copy(status = SplitOffStatus.REMOVED)
+                    else -> record
+                }
+            }
+        }
+    }
+
+    /** Deletes the split-offs the user removed, forgetting each one as soon as it is gone. */
+    private suspend fun deleteRemovedSplitOffs(api: FireflyApi, baseUrl: String, current: EditTransactionState) {
+        val logId = current.smsLog?.id
+        for (piece in current.deletedSplitOffs) {
+            val fireflyId = piece.fireflyId ?: continue
+            api.deleteTransaction(baseUrl, fireflyId)
+            if (logId != null) editSplitOffRecords(logId) { records -> records.filterNot { it.fireflyId == fireflyId } }
+            _state.update { latest -> latest.copy(deletedSplitOffs = latest.deletedSplitOffs.filterNot { it.key == piece.key }) }
+        }
+    }
+
+    /**
+     * Links each split-off to the original with Firefly's "Related" link type. Best effort: the
+     * split-off is saved either way, and links that failed are tried again on the next save.
+     */
+    private suspend fun linkSplitOffs(
+        api: FireflyApi,
+        baseUrl: String,
+        logId: Long?,
+        originalSplits: List<FireflyTransactionSplit>
+    ) {
+        if (logId == null) return
+        val originalJournalId = originalSplits.firstOrNull()?.transactionJournalId ?: return
+        val unlinked = decodeSplitOffs(smsLogDao.getById(logId)?.splitOffsJson)
+            .filter { !it.linked && it.transactionJournalId != null && it.status == SplitOffStatus.ACTIVE }
+        if (unlinked.isEmpty()) return
+        try {
+            val linkTypeId = relatedLinkTypeId(api.getLinkTypes(baseUrl)) ?: return
+            for (record in unlinked) {
+                api.createTransactionLink(
+                    baseUrl,
+                    TransactionLinkRequest(
+                        linkTypeId = linkTypeId,
+                        inwardId = originalJournalId,
+                        outwardId = record.transactionJournalId!!,
+                        notes = "Split off with FireSMS"
+                    )
+                )
+                editSplitOffRecords(logId) { records ->
+                    records.map { if (it.fireflyId == record.fireflyId) it.copy(linked = true) else it }
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // Linking is a convenience; the next save retries what is still unlinked.
+        }
+    }
+
+    /** Takes Firefly's journal ids for [piece]'s splits, which it returns in the order sent. */
+    private fun withJournalIds(piece: SplitOffState, splits: List<FireflyTransactionSplit>): SplitOffState {
+        if (splits.size != piece.parts.size) return piece
+        return piece.copy(parts = piece.parts.mapIndexed { i, part ->
+            part.copy(transactionJournalId = splits[i].transactionJournalId ?: part.transactionJournalId)
+        })
+    }
+
+    private suspend fun editSplitOffRecords(logId: Long, transform: (List<SplitOffRecord>) -> List<SplitOffRecord>) {
+        val records = decodeSplitOffs(smsLogDao.getById(logId)?.splitOffsJson)
+        smsLogDao.updateSplitOffs(logId, encodeSplitOffs(transform(records)))
     }
 
     fun clearSaveSuccess() {
@@ -521,7 +1013,16 @@ internal data class EditValidation(
         }
 }
 
-internal fun validateEdit(amounts: List<String>, groupTitle: String, total: String): EditValidation {
+/**
+ * Checks the original's split [amounts]. While there are several splits or any split-offs, the
+ * splits plus [splitOffAmounts] must add up to [total] (the whole payment).
+ */
+internal fun validateEdit(
+    amounts: List<String>,
+    groupTitle: String,
+    total: String,
+    splitOffAmounts: List<String> = emptyList()
+): EditValidation {
     if (amounts.isEmpty()) return EditValidation(totalError = "At least one split is required")
 
     val amountErrors = buildMap {
@@ -537,8 +1038,9 @@ internal fun validateEdit(amounts: List<String>, groupTitle: String, total: Stri
     val groupTitleError = if (isSplit && groupTitle.isBlank()) "Required for split transactions" else null
 
     var totalError: String? = null
-    if (isSplit && amountErrors.isEmpty()) {
-        val allocation = allocationOf(total, amounts)
+    val splitOffsValid = splitOffAmounts.all { (parseEditAmount(it)?.signum() ?: 0) > 0 }
+    if ((isSplit || splitOffAmounts.isNotEmpty()) && amountErrors.isEmpty() && splitOffsValid) {
+        val allocation = allocationOf(total, amounts + splitOffAmounts)
         if (allocation != null && !allocation.isBalanced) {
             totalError = "Split amounts (${allocation.allocated.toPlainString()}) must add up to the " +
                 "total (${allocation.total.toPlainString()})"

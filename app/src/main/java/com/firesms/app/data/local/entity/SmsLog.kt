@@ -30,6 +30,8 @@ data class SmsLog(
     @ColumnInfo(name = "original_transaction_snapshot_json") val originalTransactionSnapshotJson: String? = null,
     @ColumnInfo(name = "transaction_snapshot_json") val transactionSnapshotJson: String? = null,
     @ColumnInfo(name = "locally_modified_at") val locallyModifiedAt: Long? = null,
+    /** Separate Firefly transactions split off this one, as [com.firesms.app.data.local.SplitOffRecord] JSON. */
+    @ColumnInfo(name = "split_offs_json") val splitOffsJson: String? = null,
     /**
      * Lower-case description and amount text derived from [transactionSnapshotJson] for Activity search.
      * Maintained by [com.firesms.app.data.local.SmsLogDao]; not part of backups (rebuilt on restore).

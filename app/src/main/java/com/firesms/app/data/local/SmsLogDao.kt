@@ -15,7 +15,8 @@ data class ActivitySummary(
     val status: String,
     @ColumnInfo(name = "error_message") val errorMessage: String?,
     @ColumnInfo(name = "transaction_snapshot_json") val transactionSnapshotJson: String?,
-    @ColumnInfo(name = "locally_modified_at") val locallyModifiedAt: Long?
+    @ColumnInfo(name = "locally_modified_at") val locallyModifiedAt: Long?,
+    @ColumnInfo(name = "split_offs_json") val splitOffsJson: String? = null
 )
 
 /** History totals for the Activity health panel and filter chips. */
@@ -146,6 +147,9 @@ abstract class SmsLogDao {
         id: Long, snapshotJson: String, modifiedAt: Long?, searchText: String
     )
 
+    @Query("UPDATE sms_log SET split_offs_json = :splitOffsJson WHERE id = :id")
+    abstract suspend fun updateSplitOffs(id: Long, splitOffsJson: String?)
+
     @Delete
     abstract suspend fun delete(log: SmsLog)
 
@@ -175,7 +179,7 @@ abstract class SmsLogDao {
     companion object {
         private const val SUMMARY_COLUMNS =
             "id, sender, substr(body, 1, 200) AS body_preview, received_at, status, error_message, " +
-                "transaction_snapshot_json, locally_modified_at"
+                "transaction_snapshot_json, locally_modified_at, split_offs_json"
         private const val SEARCH_CLAUSE =
             "(:pattern IS NULL OR sender LIKE :pattern ESCAPE '\\' OR search_text LIKE :pattern ESCAPE '\\')"
     }

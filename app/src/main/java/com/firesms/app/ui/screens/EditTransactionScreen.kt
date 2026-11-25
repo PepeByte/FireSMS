@@ -7,7 +7,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Input
+import androidx.compose.material.icons.automirrored.outlined.CallSplit
 import androidx.compose.material.icons.automirrored.outlined.Notes
+import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.CalendarMonth
@@ -25,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -43,11 +46,15 @@ import com.firesms.app.ui.components.rememberUnsavedChangesGuard
 import com.firesms.app.ui.theme.FireSmsTheme
 import com.firesms.app.ui.viewmodels.EditRowState
 import com.firesms.app.ui.viewmodels.EditTransactionViewModel
+import com.firesms.app.ui.viewmodels.SplitOffPart
+import com.firesms.app.ui.viewmodels.SplitOffState
 import com.firesms.app.ui.viewmodels.SplitAllocation
 import com.firesms.app.ui.viewmodels.allocationOf
 import com.firesms.app.ui.viewmodels.allocationText
 import com.firesms.app.ui.viewmodels.formatMoney
 import com.firesms.app.ui.viewmodels.parseEditAmount
+import com.firesms.app.data.remote.transactionWebUrl
+import java.math.BigDecimal
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -74,6 +81,11 @@ fun EditTransactionScreen(
     var errorDetail by remember { mutableStateOf<String?>(null) }
     // The split whose amount should take focus once it is on screen.
     var focusRowKey by remember { mutableStateOf<Long?>(null) }
+    // The split-off whose account should take focus once it is on screen.
+    var focusSplitOffKey by remember { mutableStateOf<Long?>(null) }
+    // The split inside a split-off whose amount should take focus once it is on screen.
+    var focusSplitOffPartKey by remember { mutableStateOf<Long?>(null) }
+    val uriHandler = LocalUriHandler.current
 
     val guardedBack = rememberUnsavedChangesGuard(isDirty = state.isDirty && !state.saving, onBack = onBack)
 
@@ -99,6 +111,13 @@ fun EditTransactionScreen(
         )
         if (result == SnackbarResult.ActionPerformed) errorDetail = detail
         viewModel.clearSaveError()
+    }
+
+    LaunchedEffect(state.notice) {
+        val message = state.notice ?: return@LaunchedEffect
+        // Clear only afterwards: clearing changes the key, which would cancel this snackbar.
+        snackbarHostState.showSnackbar(message = message, withDismissAction = true, duration = SnackbarDuration.Long)
+        viewModel.clearNotice()
     }
 
     val removedSplit = state.removedSplit
@@ -130,11 +149,22 @@ fun EditTransactionScreen(
 
     val showForm = !state.loading && state.error == null
     val isSplit = state.rows.size > 1
+    val hasSplitOffs = state.hasSplitOffs
     val currencyLabel = state.currencyLabel
     // Only recomputed, and only re-rendered, when an amount or the total actually changes.
     val allocation by remember {
         derivedStateOf {
-            if (state.rows.size > 1) allocationOf(state.originalTotal, state.rows.map { it.amount }) else null
+            if (state.rows.size > 1 || state.splitOffs.isNotEmpty()) {
+                allocationOf(
+                    state.paymentTotal.ifBlank { state.originalTotal },
+                    state.rows.map { it.amount } + state.splitOffs.map { it.amount }
+                )
+            } else null
+        }
+    }
+    val yourShare by remember {
+        derivedStateOf {
+            state.rows.sumOf { parseEditAmount(it.amount)?.setScale(2, java.math.RoundingMode.HALF_UP) ?: BigDecimal.ZERO }
         }
     }
     val accountNames = remember(state.accountsLoaded, state.accountSuggestions) {
@@ -204,9 +234,13 @@ fun EditTransactionScreen(
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     TotalCard(
-                        total = state.originalTotal,
+                        total = if (hasSplitOffs || state.deletedSplitOffs.isNotEmpty()) {
+                            state.paymentTotal.ifBlank { state.originalTotal }
+                        } else state.originalTotal,
                         currencyLabel = currencyLabel,
-                        splitCount = state.rows.size
+                        splitCount = state.rows.size,
+                        yourShare = yourShare.takeIf { hasSplitOffs },
+                        splitOffCount = state.splitOffs.size
                     )
 
                     if (isSplit) {
@@ -236,7 +270,9 @@ fun EditTransactionScreen(
                         onDestinationChange = viewModel::setDestinationName
                     )
 
-                    if (isSplit) {
+                    if (hasSplitOffs) {
+                        Text("Your share", style = MaterialTheme.typography.titleMedium)
+                    } else if (isSplit) {
                         Text("Splits", style = MaterialTheme.typography.titleMedium)
                     }
 
@@ -269,6 +305,30 @@ fun EditTransactionScreen(
                         Spacer(Modifier.width(8.dp))
                         Text("Add split")
                     }
+
+                    SplitOffSection(
+                        splitOffs = state.splitOffs,
+                        transactionType = state.transactionType,
+                        canSplitOff = state.canSplitOff,
+                        currencyLabel = currencyLabel,
+                        accountSuggestions = state.accountSuggestions,
+                        accountNames = accountNames,
+                        categorySuggestions = state.categorySuggestions,
+                        budgetSuggestions = state.budgetSuggestions,
+                        descriptionSuggestions = state.descriptionSuggestions,
+                        focusKey = focusSplitOffKey,
+                        onFocused = { focusSplitOffKey = null },
+                        focusPartKey = focusSplitOffPartKey,
+                        onPartFocused = { focusSplitOffPartKey = null },
+                        onAdd = { focusSplitOffKey = viewModel.addSplitOff() },
+                        onUpdate = viewModel::updateSplitOff,
+                        onRemove = viewModel::removeSplitOff,
+                        onAddPart = { pieceKey -> focusSplitOffPartKey = viewModel.addSplitOffPart(pieceKey) },
+                        onRemovePart = viewModel::removeSplitOffPart,
+                        onOpen = { fireflyId ->
+                            runCatching { uriHandler.openUri(transactionWebUrl(state.fireflyBaseUrl, fireflyId)) }
+                        }
+                    )
                 }
             }
         }
@@ -278,7 +338,13 @@ fun EditTransactionScreen(
 // ─── Sections ──────────────────────────────────────────────────
 
 @Composable
-private fun TotalCard(total: String, currencyLabel: String, splitCount: Int) {
+private fun TotalCard(
+    total: String,
+    currencyLabel: String,
+    splitCount: Int,
+    yourShare: BigDecimal? = null,
+    splitOffCount: Int = 0
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.medium,
@@ -293,7 +359,20 @@ private fun TotalCard(total: String, currencyLabel: String, splitCount: Int) {
                 parseEditAmount(total)?.let { formatMoney(it, currencyLabel) } ?: total,
                 style = MaterialTheme.typography.headlineSmall
             )
-            if (splitCount > 1) {
+            if (yourShare != null) {
+                val parsedTotal = parseEditAmount(total)?.setScale(2, java.math.RoundingMode.HALF_UP)
+                val splitOff = parsedTotal?.subtract(yourShare)
+                Text(
+                    buildString {
+                        append("Your share ${formatMoney(yourShare, currencyLabel)}")
+                        if (splitOff != null) {
+                            append(" · split off ${formatMoney(splitOff, currencyLabel)}")
+                            if (splitOffCount > 1) append(" in $splitOffCount transactions")
+                        }
+                    },
+                    style = MaterialTheme.typography.bodySmall
+                )
+            } else if (splitCount > 1) {
                 Text(
                     "Split into $splitCount parts",
                     style = MaterialTheme.typography.bodySmall
@@ -639,6 +718,324 @@ private fun SplitCard(
                 )
             }
         }
+    }
+}
+
+// ─── Split-offs ────────────────────────────────────────────────
+
+@Composable
+private fun SplitOffSection(
+    splitOffs: List<SplitOffState>,
+    transactionType: String,
+    canSplitOff: Boolean,
+    currencyLabel: String,
+    accountSuggestions: List<String>,
+    accountNames: Set<String>?,
+    categorySuggestions: List<String>,
+    budgetSuggestions: List<String>,
+    descriptionSuggestions: List<String>,
+    focusKey: Long?,
+    onFocused: () -> Unit,
+    focusPartKey: Long?,
+    onPartFocused: () -> Unit,
+    onAdd: () -> Unit,
+    onUpdate: (SplitOffState) -> Unit,
+    onRemove: (Long) -> Unit,
+    onAddPart: (Long) -> Unit,
+    onRemovePart: (pieceKey: Long, partKey: Long) -> Unit,
+    onOpen: (String) -> Unit
+) {
+    if (splitOffs.isNotEmpty()) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Split off to other accounts", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Separate Firefly transactions with the same date and " +
+                    (if (transactionType.equals("deposit", ignoreCase = true)) "destination" else "source") +
+                    " account, linked to this one.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+
+    val isDeposit = transactionType.equals("deposit", ignoreCase = true)
+    splitOffs.forEach { piece ->
+        key(piece.key) {
+            SplitOffCard(
+                piece = piece,
+                accountLabel = if (isDeposit) "From account" else "To account",
+                currencyLabel = currencyLabel,
+                accountSuggestions = accountSuggestions,
+                accountNames = accountNames,
+                categorySuggestions = categorySuggestions,
+                budgetSuggestions = budgetSuggestions,
+                descriptionSuggestions = descriptionSuggestions,
+                requestFocus = focusKey == piece.key,
+                onFocused = onFocused,
+                focusPartKey = focusPartKey,
+                onPartFocused = onPartFocused,
+                onUpdate = onUpdate,
+                onRemove = { onRemove(piece.key) },
+                onAddPart = { onAddPart(piece.key) },
+                onRemovePart = { partKey -> onRemovePart(piece.key, partKey) },
+                onOpen = piece.fireflyId?.let { id -> { onOpen(id) } }
+            )
+        }
+    }
+
+    OutlinedButton(
+        onClick = onAdd,
+        enabled = canSplitOff,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Icon(Icons.AutoMirrored.Outlined.CallSplit, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Text("Split off to another account")
+    }
+    if (!canSplitOff) {
+        Text(
+            "Only withdrawals and deposits can be split off to another account.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun SplitOffCard(
+    piece: SplitOffState,
+    accountLabel: String,
+    currencyLabel: String,
+    accountSuggestions: List<String>,
+    accountNames: Set<String>?,
+    categorySuggestions: List<String>,
+    budgetSuggestions: List<String>,
+    descriptionSuggestions: List<String>,
+    requestFocus: Boolean,
+    onFocused: () -> Unit,
+    focusPartKey: Long?,
+    onPartFocused: () -> Unit,
+    onUpdate: (SplitOffState) -> Unit,
+    onRemove: () -> Unit,
+    onAddPart: () -> Unit,
+    onRemovePart: (Long) -> Unit,
+    onOpen: (() -> Unit)?
+) {
+    val accountFocus = remember { FocusRequester() }
+    LaunchedEffect(requestFocus) {
+        if (requestFocus) {
+            accountFocus.requestFocus()
+            onFocused()
+        }
+    }
+    val title = piece.accountName.trim().ifEmpty { "New split-off" }
+    fun updatePart(part: SplitOffPart) =
+        onUpdate(piece.copy(parts = piece.parts.map { if (it.key == part.key) part else it }))
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        colors = fireSmsCardColors(),
+        border = fireSmsCardBorder()
+    ) {
+        Column(
+            modifier = Modifier.padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Split off · $title", style = MaterialTheme.typography.titleMedium)
+                    val status = listOfNotNull(
+                        if (piece.isSplit) {
+                            "${piece.parts.size} splits · " +
+                                (parseEditAmount(piece.amount)?.let { formatMoney(it, currencyLabel) } ?: piece.amount)
+                        } else null,
+                        when {
+                            !piece.isSaved -> "Created in Firefly when you save"
+                            !piece.linked -> "Not linked in Firefly yet; saving tries again"
+                            else -> null
+                        }
+                    ).joinToString(" · ")
+                    if (status.isNotEmpty()) {
+                        Text(
+                            status,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                if (onOpen != null) {
+                    IconButton(onClick = onOpen) {
+                        Icon(Icons.AutoMirrored.Outlined.OpenInNew, contentDescription = "Open $title in Firefly")
+                    }
+                }
+                IconButton(onClick = onRemove) {
+                    Icon(
+                        Icons.Outlined.Delete,
+                        contentDescription = "Remove split-off $title",
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+
+            Column(
+                modifier = Modifier.padding(end = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                FireSmsAutocompleteField(
+                    value = piece.accountName,
+                    onValueChange = { onUpdate(piece.copy(accountName = it)) },
+                    label = accountLabel,
+                    suggestions = accountSuggestions,
+                    modifier = Modifier.fillMaxWidth().focusRequester(accountFocus),
+                    leadingIcon = { Icon(Icons.Outlined.AccountBalanceWallet, contentDescription = null) },
+                    isError = piece.accountError != null,
+                    supportingText = piece.accountError ?: unknownAccountHint(piece.accountName, accountNames)
+                        ?: "For example a liability account for a friend's share"
+                )
+
+                if (piece.isSplit) {
+                    FireSmsAutocompleteField(
+                        value = piece.groupTitle,
+                        onValueChange = { onUpdate(piece.copy(groupTitle = it)) },
+                        label = "Group title",
+                        suggestions = descriptionSuggestions,
+                        modifier = Modifier.fillMaxWidth(),
+                        leadingIcon = { Icon(Icons.Outlined.Title, contentDescription = null) },
+                        isError = piece.groupTitleError != null,
+                        supportingText = piece.groupTitleError ?: "Names this split-off's split transaction",
+                        keyboardOptions = TEXT_KEYBOARD
+                    )
+                }
+
+                piece.parts.forEachIndexed { index, part ->
+                    key(part.key) {
+                        SplitOffPartFields(
+                            part = part,
+                            heading = if (piece.isSplit) "Split ${index + 1}" else null,
+                            removeLabel = "Remove split ${index + 1} of split-off $title",
+                            currencyLabel = currencyLabel,
+                            amountHint = if (piece.isSplit) null else "Taken from your share",
+                            categorySuggestions = categorySuggestions,
+                            budgetSuggestions = budgetSuggestions,
+                            descriptionSuggestions = descriptionSuggestions,
+                            requestAmountFocus = focusPartKey == part.key,
+                            onAmountFocused = onPartFocused,
+                            onUpdate = ::updatePart,
+                            onRemove = { onRemovePart(part.key) }
+                        )
+                    }
+                }
+
+                TextButton(onClick = onAddPart) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Add split to this split-off")
+                }
+            }
+        }
+    }
+}
+
+/** One split's fields inside a split-off card; [heading] is shown only when there are several. */
+@Composable
+private fun SplitOffPartFields(
+    part: SplitOffPart,
+    heading: String?,
+    removeLabel: String,
+    currencyLabel: String,
+    amountHint: String?,
+    categorySuggestions: List<String>,
+    budgetSuggestions: List<String>,
+    descriptionSuggestions: List<String>,
+    requestAmountFocus: Boolean,
+    onAmountFocused: () -> Unit,
+    onUpdate: (SplitOffPart) -> Unit,
+    onRemove: () -> Unit
+) {
+    val amountFocus = remember { FocusRequester() }
+    LaunchedEffect(requestAmountFocus) {
+        if (requestAmountFocus) {
+            amountFocus.requestFocus()
+            onAmountFocused()
+        }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (heading != null) {
+            HorizontalDivider()
+            Row(
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(heading, style = MaterialTheme.typography.titleSmall)
+                IconButton(onClick = onRemove) {
+                    Icon(
+                        Icons.Outlined.Delete,
+                        contentDescription = removeLabel,
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+        }
+
+        OutlinedTextField(
+            value = part.amount,
+            onValueChange = { onUpdate(part.copy(amount = it)) },
+            label = { Text("Amount") },
+            prefix = currencyLabel.takeIf { it.isNotBlank() }?.let { label ->
+                { Text(label) }
+            },
+            singleLine = true,
+            isError = part.amountError != null,
+            supportingText = (part.amountError ?: amountHint)?.let { text -> { Text(text) } },
+            keyboardOptions = AMOUNT_KEYBOARD,
+            modifier = Modifier.fillMaxWidth().focusRequester(amountFocus)
+        )
+
+        FireSmsAutocompleteField(
+            value = part.description,
+            onValueChange = { onUpdate(part.copy(description = it)) },
+            label = "Description",
+            suggestions = descriptionSuggestions,
+            modifier = Modifier.fillMaxWidth(),
+            leadingIcon = { Icon(Icons.Outlined.Description, contentDescription = null) },
+            keyboardOptions = TEXT_KEYBOARD
+        )
+
+        FireSmsAutocompleteField(
+            value = part.categoryName,
+            onValueChange = { onUpdate(part.copy(categoryName = it)) },
+            label = "Category (optional)",
+            suggestions = categorySuggestions,
+            modifier = Modifier.fillMaxWidth(),
+            leadingIcon = { Icon(Icons.Outlined.Category, contentDescription = null) }
+        )
+
+        FireSmsAutocompleteField(
+            value = part.budgetName,
+            onValueChange = { onUpdate(part.copy(budgetName = it)) },
+            label = "Budget (optional)",
+            suggestions = budgetSuggestions,
+            modifier = Modifier.fillMaxWidth(),
+            leadingIcon = { Icon(Icons.Outlined.AccountBalanceWallet, contentDescription = null) }
+        )
+
+        OutlinedTextField(
+            value = part.notes,
+            onValueChange = { onUpdate(part.copy(notes = it)) },
+            label = { Text("Notes (optional)") },
+            leadingIcon = { Icon(Icons.AutoMirrored.Outlined.Notes, contentDescription = null) },
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+            minLines = 2,
+            maxLines = 4,
+            modifier = Modifier.fillMaxWidth()
+        )
     }
 }
 

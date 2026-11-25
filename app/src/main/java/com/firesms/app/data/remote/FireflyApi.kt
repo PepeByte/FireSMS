@@ -18,7 +18,9 @@ import kotlinx.serialization.json.Json
 
 @Serializable
 data class TransactionRequest(
-    @SerialName("transactions") val transactions: List<TransactionBody>
+    @SerialName("transactions") val transactions: List<TransactionBody>,
+    /** Required by Firefly when there are several splits. */
+    @SerialName("group_title") val groupTitle: String? = null
 )
 
 @OptIn(ExperimentalSerializationApi::class)
@@ -144,6 +146,33 @@ data class TransactionUpdateSplit(
     @SerialName("budget_name") val budgetName: String? = null,
     val notes: String? = null,
     val order: Int = 0
+)
+
+// Transaction links: the "Related" link between an SMS transaction and its split-offs
+@Serializable
+data class LinkTypeListResponse(
+    val data: List<LinkTypeResource>
+)
+
+@Serializable
+data class LinkTypeResource(
+    val id: String,
+    val attributes: LinkTypeAttributes
+)
+
+@Serializable
+data class LinkTypeAttributes(
+    val name: String = "",
+    val inward: String? = null,
+    val outward: String? = null
+)
+
+@Serializable
+data class TransactionLinkRequest(
+    @SerialName("link_type_id") val linkTypeId: String,
+    @SerialName("inward_id") val inwardId: String,
+    @SerialName("outward_id") val outwardId: String,
+    val notes: String? = null
 )
 
 // Category and budget list responses
@@ -440,6 +469,93 @@ class FireflyApi(private val token: String) {
         return response.body()
     }
 
+    /**
+     * Creates a transaction and returns the stored group, including its journal ids. Errors follow
+     * [createTransactionRaw]: 4xx is [FireflyError], anything else [FireflyUnavailable].
+     */
+    suspend fun createTransactionGroup(
+        baseUrl: String,
+        payload: TransactionRequest
+    ): FireflyTransactionData {
+        val url = apiUrl(baseUrl, "transactions")
+        try {
+            val response = client.post(url) {
+                authorize()
+                contentType(ContentType.Application.Json)
+                setBody(payload)
+            }
+            if (response.status.value in 400..499) {
+                throw FireflyError(response.status.value, response.bodyAsText().abbreviate())
+            }
+            if (!response.status.isSuccess()) {
+                throw FireflyUnavailable(response.status.value, response.bodyAsText().abbreviate())
+            }
+            return response.body<FireflyTransactionResponse>().data
+        } catch (e: FireflyError) {
+            throw e
+        } catch (e: FireflyUnavailable) {
+            throw e
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw FireflyUnavailable(0, networkErrorMessage(e))
+        }
+    }
+
+    /**
+     * Finds the transaction group dated [day] (yyyy-MM-dd) holding a split with [externalId], so a
+     * create that timed out after Firefly stored it is not repeated.
+     */
+    suspend fun findTransactionByExternalId(baseUrl: String, day: String, externalId: String): FireflyTransactionData? {
+        if (!DAY_PATTERN.matches(day)) return null
+        return try {
+            listTransactions(baseUrl, day, day).firstOrNull { group ->
+                group.attributes.transactions.any { it.externalId == externalId }
+            }
+        } catch (e: java.io.IOException) {
+            throw FireflyUnavailable(0, networkErrorMessage(e))
+        }
+    }
+
+    /** Deletes a transaction group. One that is already gone counts as deleted. */
+    suspend fun deleteTransaction(baseUrl: String, transactionId: String) {
+        val response = try {
+            client.delete(apiUrl(baseUrl, "transactions/$transactionId")) { authorize() }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw FireflyUnavailable(0, networkErrorMessage(e))
+        }
+        if (response.status.isSuccess() || response.status.value == 404) return
+        if (response.status.value in 400..499) {
+            throw FireflyError(response.status.value, response.bodyAsText().abbreviate())
+        }
+        throw FireflyUnavailable(response.status.value, response.bodyAsText().abbreviate())
+    }
+
+    suspend fun getLinkTypes(baseUrl: String): List<LinkTypeResource> {
+        val response = client.get(apiUrl(baseUrl, "link-types")) { authorize() }
+        if (!response.status.isSuccess()) {
+            throw FireflyUnavailable(response.status.value, response.bodyAsText().abbreviate())
+        }
+        return response.body<LinkTypeListResponse>().data
+    }
+
+    /** Links two transaction journals (not groups) with the link type [linkTypeId]. */
+    suspend fun createTransactionLink(baseUrl: String, request: TransactionLinkRequest) {
+        val response = client.post(apiUrl(baseUrl, "transaction-links")) {
+            authorize()
+            contentType(ContentType.Application.Json)
+            setBody(request)
+        }
+        if (response.status.value in 400..499) {
+            throw FireflyError(response.status.value, response.bodyAsText().abbreviate())
+        }
+        if (!response.status.isSuccess()) {
+            throw FireflyUnavailable(response.status.value, response.bodyAsText().abbreviate())
+        }
+    }
+
     /** Fetches every page of accounts of [type] (e.g. `asset`, `expense`, `all`). */
     suspend fun getAccounts(baseUrl: String, type: String = "asset"): List<AccountResource> {
         val accounts = mutableListOf<AccountResource>()
@@ -497,6 +613,11 @@ class FireflyApi(private val token: String) {
     }
 }
 
+/** Firefly's built-in "Related" link type ("relates to"), or null when the server has none like it. */
+internal fun relatedLinkTypeId(types: List<LinkTypeResource>): String? =
+    types.firstOrNull { it.attributes.name.equals("Related", ignoreCase = true) }?.id
+        ?: types.firstOrNull { it.attributes.outward.equals("relates to", ignoreCase = true) }?.id
+
 /**
  * Builds an API URL from the address the user typed. Pasting the address out of a browser
  * commonly brings a trailing slash, a `/api` suffix (some users copy the docs' base URL), or a
@@ -508,6 +629,14 @@ internal fun apiUrl(baseUrl: String, path: String): String {
     if (base.endsWith("/api/v1", ignoreCase = true)) base = base.dropLast(7)
     else if (base.endsWith("/api", ignoreCase = true)) base = base.dropLast(4)
     return "$base/api/v1/${path.trimStart('/')}"
+}
+
+/** The Firefly web page for transaction group [transactionId], for opening in a browser. */
+fun transactionWebUrl(baseUrl: String, transactionId: String): String {
+    var base = normalizeFireflyUrl(baseUrl)
+    if (base.endsWith("/api/v1", ignoreCase = true)) base = base.dropLast(7)
+    else if (base.endsWith("/api", ignoreCase = true)) base = base.dropLast(4)
+    return "$base/transactions/show/$transactionId"
 }
 
 /** Whether [url] names its scheme, e.g. `https://`. */

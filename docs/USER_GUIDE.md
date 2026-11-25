@@ -95,6 +95,22 @@ When FireSMS creates a transaction, it can show a notification. Use the notifica
 
 The editor lets you adjust supported Firefly III transaction fields. Changes are sent back to Firefly III.
 
+### Splitting off a share to another account
+
+Use this when part of a payment isn't yours, for example a meetup bill where half is your friend's share and you track it on a liability account.
+
+1. Open the transaction in the editor and tap **Split off to another account**.
+2. Pick the account (for example "Friend – Meetups"). The amount starts at half of your share; change it if needed and your share adjusts so the total still matches the SMS.
+3. Optionally change the description, category, budget and notes. Title mappings are not applied to split-offs.
+4. To split the friend's share itself, for example food and drinks under different categories, tap **Add split to this split-off**. The new split takes half of the last one, so the split-off's total and your share stay the same. Give it a **Group title**; Firefly III needs one for split transactions. Removing a split moves its amount to the split above it.
+5. Tap **Save**.
+
+The split-off is a separate Firefly III transaction (a split transaction if you added splits to it) with the same date and the same own account (the source for a withdrawal, the destination for a deposit). Your original transaction is reduced by the same amount, and the two are linked in Firefly III with the "Related" link type. Both open together in the editor, and changing the date, type or own account there updates both.
+
+Removing a split-off gives its amount back to your share and deletes it from Firefly III when you save. Only withdrawals and deposits can be split off.
+
+If saving fails part-way, tap **Save** again and FireSMS finishes the remaining steps without creating a second copy. If you leave the screen first, the editor restores the amounts you meant next time you open it and asks you to save again.
+
 ## Choosing accounts in a rule
 
 The **Accounts** section of a parser rule follows the transaction type: **Paid from / Paid to** for withdrawals, **Received into / Received from** for deposits, and **Moved from / Moved to** for transfers. Pick your account from the list; the other account is optional for withdrawals and deposits. A check under each field shows whether the name exists in Firefly III, and the line **In Firefly: … → …** shows exactly which way the money will be recorded.

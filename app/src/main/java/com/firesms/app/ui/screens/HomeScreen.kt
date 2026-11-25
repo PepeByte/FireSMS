@@ -779,6 +779,15 @@ private fun ActivityDetailSheet(
                             supporting = lines.joinToString("\n").takeIf { it.isNotBlank() }
                         )
                     }
+                    detail.splitOffs.forEach { splitOff ->
+                        DetailItem(
+                            label = "Split off",
+                            value = splitOff.description.ifBlank { "Untitled transaction" },
+                            supporting = listOfNotNull(splitOff.amount, splitOff.accountName.takeIf { it.isNotBlank() })
+                                .joinToString(" → ")
+                                .takeIf { it.isNotBlank() }
+                        )
+                    }
                     DetailItem(label = "Sender", value = log.sender)
                     DetailItem(label = "Received", value = detail.received)
                     detail.processed?.let { DetailItem(label = "Processed", value = it) }

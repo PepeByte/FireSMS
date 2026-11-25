@@ -22,6 +22,7 @@ import com.firesms.app.data.local.StoredTransactionSnapshot
 import com.firesms.app.data.local.StoredTransactionSplit
 import com.firesms.app.data.local.activitySearchPattern
 import com.firesms.app.data.local.canRetryFailedTransaction
+import com.firesms.app.data.local.decodeSplitOffs
 import com.firesms.app.data.local.decodeTransactionSnapshot
 import com.firesms.app.data.local.entity.SmsLog
 import com.firesms.app.service.SmsStatus
@@ -105,6 +106,14 @@ data class ActivitySplitDetail(
     val date: String?
 )
 
+/** A separate transaction split off this one, e.g. a friend's share moved to a liability account. */
+@Immutable
+data class ActivitySplitOffDetail(
+    val description: String,
+    val amount: String?,
+    val accountName: String
+)
+
 /** The full record for the detail sheet, loaded only when a row is opened. */
 @Immutable
 data class ActivityDetail(
@@ -114,6 +123,7 @@ data class ActivityDetail(
     val amount: String?,
     val direction: AmountDirection,
     val splits: List<ActivitySplitDetail>,
+    val splitOffs: List<ActivitySplitOffDetail> = emptyList(),
     val received: String,
     val processed: String?,
     val isModified: Boolean
@@ -442,7 +452,8 @@ internal fun buildActivityRow(summary: ActivitySummary, time: DateTimeFormatter,
         first?.type?.takeIf { it.isNotBlank() }?.replaceFirstChar { it.uppercase() },
         Instant.ofEpochMilli(summary.receivedAt).atZone(zone).format(time),
         first?.categoryName?.takeIf { it.isNotBlank() },
-        snapshot?.transactions?.size?.takeIf { it > 1 }?.let { "$it splits" }
+        snapshot?.transactions?.size?.takeIf { it > 1 }?.let { "$it splits" },
+        splitOffSummary(summary.splitOffsJson, first)
     ).joinToString(" · ")
     return ActivityRow(
         id = summary.id,
@@ -456,6 +467,16 @@ internal fun buildActivityRow(summary: ActivitySummary, time: DateTimeFormatter,
         status = summary.status,
         isModified = summary.locallyModifiedAt != null
     )
+}
+
+/** "Split off ₹1000.00" for the Activity row, or null when nothing was split off. */
+internal fun splitOffSummary(splitOffsJson: String?, firstSplit: StoredTransactionSplit?): String? {
+    val records = decodeSplitOffs(splitOffsJson)
+    if (records.isEmpty()) return null
+    val total = records.fold(BigDecimal.ZERO) { sum, record ->
+        sum + (record.amount.trim().toBigDecimalOrNull() ?: BigDecimal.ZERO)
+    }.toPlainString()
+    return "Split off " + (firstSplit?.formattedAmount(total) ?: formatDisplayAmount(total))
 }
 
 internal fun buildActivityDetail(log: SmsLog, formatters: ActivityFormatters, zone: ZoneId): ActivityDetail {
@@ -476,6 +497,15 @@ internal fun buildActivityDetail(log: SmsLog, formatters: ActivityFormatters, zo
                     ?.let { signedAmount(split.formattedAmount(it), splitDirection) },
                 direction = splitDirection,
                 date = formatSplitDate(split.date, formatters.dateTime, zone)
+            )
+        },
+        splitOffs = decodeSplitOffs(log.splitOffsJson).map { record ->
+            ActivitySplitOffDetail(
+                description = record.description,
+                amount = record.amount.takeIf { it.isNotBlank() }?.let { amount ->
+                    snapshot?.transactions?.firstOrNull()?.formattedAmount(amount) ?: formatDisplayAmount(amount)
+                },
+                accountName = record.accountName
             )
         },
         received = format(log.receivedAt),

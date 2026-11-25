@@ -136,6 +136,27 @@ permits cleartext traffic and trusts user-installed CA certificates so those set
 loads no third-party or remote web content, so this does not widen exposure for unrelated traffic.
 Both lint warnings for this configuration are acknowledged deliberately in that file.
 
+### Split-offs
+
+The edit screen can split part of an SMS transaction off into separate Firefly transactions (for
+example a friend's share moved to a liability account). They are recorded on the SMS log as
+`SplitOffRecord` JSON in `sms_log.split_offs_json`, so backups carry them without a format change.
+A split-off can itself have several splits (`SplitOffState.parts`), stored in Firefly as one split
+transaction group with a group title; the record keeps its total and its first journal id, which
+the "Related" link points at.
+
+Each split-off has its own external id (`<sms hash>-split-<random>`, shared by its splits), so it never matches the
+original in duplicate detection. Saving runs in an order that never loses money from Firefly
+if it stops part-way: new split-offs are created (or found again by external id) and recorded
+first, then changed split-offs are updated, then the original is updated, then removed split-offs
+are deleted. Finally each split-off is linked to the original with the "Related" link type; this
+step is best effort and is retried on the next save.
+
+Each record carries a status (`creating`, `active`, `removing`, `removed`) written before the step
+it guards, and a `creating` record is written before its create request is sent. If a save stops
+part-way, even with the app killed, reopening the editor uses `recoverPayment` to restore the
+intended amounts from those statuses and asks the user to save again to finish.
+
 ## Retry queue
 
 Failed transaction creates caused by network/server unavailability are stored in `pending_transactions`. `RetryWorker` later retries due items using WorkManager with network constraints based on the user's sync preference:

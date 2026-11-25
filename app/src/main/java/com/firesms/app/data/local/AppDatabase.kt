@@ -12,7 +12,7 @@ import com.firesms.app.data.local.entity.TitleMappingRule
 
 @Database(
     entities = [SmsLog::class, PendingTransaction::class, ParserRule::class, TitleMappingRule::class],
-    version = 8,
+    version = 9,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -89,6 +89,10 @@ abstract class AppDatabase : RoomDatabase() {
                 }
         }
 
+        private val MIGRATION_8_9 = Migration(8, 9) { db ->
+            db.execSQL("ALTER TABLE sms_log ADD COLUMN split_offs_json TEXT DEFAULT NULL")
+        }
+
         fun getInstance(context: android.content.Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -102,7 +106,8 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_4_5,
                     MIGRATION_5_6,
                     MIGRATION_6_7,
-                    MIGRATION_7_8
+                    MIGRATION_7_8,
+                    MIGRATION_8_9
                 ).build().also { INSTANCE = it }
             }
         }

@@ -556,8 +556,18 @@ class FireflyApi(private val token: String) {
         }
     }
 
-    /** Fetches every page of accounts of [type] (e.g. `asset`, `expense`, `all`). */
+    /**
+     * Fetches every page of accounts of [type] (e.g. `asset`, `expense`, `all`).
+     *
+     * Firefly's `all` filter leaves out the "Credit card" liability type (it only covers loans,
+     * debts and mortgages), so for `all` the liabilities are fetched too and merged in.
+     */
     suspend fun getAccounts(baseUrl: String, type: String = "asset"): List<AccountResource> {
+        if (type != "all") return getAccountPages(baseUrl, type)
+        return mergeAccounts(getAccountPages(baseUrl, "all"), getAccountPages(baseUrl, "liabilities"))
+    }
+
+    private suspend fun getAccountPages(baseUrl: String, type: String): List<AccountResource> {
         val accounts = mutableListOf<AccountResource>()
         var page = 1
         var totalPages: Int
@@ -826,3 +836,9 @@ class FireflyError(val statusCode: Int, responseBody: String) : Exception(
 class FireflyUnavailable(val statusCode: Int, responseBody: String) : Exception(
     "Firefly unavailable (HTTP $statusCode): $responseBody"
 )
+
+/** [first] followed by the accounts of [second] it does not already contain (matched by id). */
+internal fun mergeAccounts(first: List<AccountResource>, second: List<AccountResource>): List<AccountResource> {
+    val seen = first.mapTo(HashSet()) { it.id }
+    return first + second.filter { seen.add(it.id) }
+}

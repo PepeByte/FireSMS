@@ -4,9 +4,14 @@ All notable changes to FireSMS will be documented in this file.
 
 ## Unreleased
 
+## 1.2.0 — 2026-11-25
+
 ### Editing
 - **Split off to another account**: move part of a transaction, such as a friend's share of a bill, into a separate Firefly transaction on another account (for example a liability). The original is reduced to match, the two are linked in Firefly, and both are edited together on one screen. A split-off can have its own splits, each with its own amount, category and budget.
 - Activity shows how much was split off on the row and lists each split-off in the details.
+
+### Activity
+- The transaction details snackbar no longer covers the action buttons and can be dismissed.
 
 ## 1.1.0 — 2026-11-10
 
